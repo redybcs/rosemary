@@ -31,6 +31,7 @@ pub mod fault;
 pub mod fork;
 pub mod heapcheck;
 pub mod host;
+pub mod hostbridge;
 pub mod interp;
 pub mod interpose;
 pub mod jit;
