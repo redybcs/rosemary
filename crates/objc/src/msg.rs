@@ -1498,21 +1498,33 @@ mod tests {
         let class = class_answering(c"RosemaryCachedRace", sel, answer_one);
         let instance = crate::object::create_instance(class, 0) as usize;
         let sel_address = sel as usize;
+        const SENDERS: usize = 4;
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let senders: Vec<_> = (0..4)
+        // The replacing starts once every sender is sending: on a busy machine
+        // with few cores it could otherwise be over before one had run.
+        let running = std::sync::Arc::new(std::sync::Barrier::new(SENDERS + 1));
+        let senders: Vec<_> = (0..SENDERS)
             .map(|_| {
                 let stop = std::sync::Arc::clone(&stop);
+                let running = std::sync::Arc::clone(&running);
                 std::thread::spawn(move || {
                     let mut sent = 0u64;
-                    while !stop.load(Ordering::Relaxed) {
+                    loop {
                         let answer = send_answer(instance as Id, sel_address as Sel);
                         assert!(answer == 1 || answer == 2, "a send reached {answer}");
                         sent += 1;
+                        if sent == 1 {
+                            running.wait();
+                        }
+                        if stop.load(Ordering::Relaxed) {
+                            break;
+                        }
                     }
                     sent
                 })
             })
             .collect();
+        running.wait();
         for round in 0..20_000 {
             let imp = match round % 2 {
                 0 => answer_two as crate::class::Imp,
