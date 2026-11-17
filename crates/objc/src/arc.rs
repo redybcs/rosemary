@@ -602,18 +602,28 @@ mod lifetime_tests {
         assert_eq!(DEALLOCATED.load(Ordering::SeqCst), 1);
     }
 
-    /// Allocate, retain, release and free plain objects on every core at
-    /// once. Run with `cargo test --release -p objc -- --ignored --nocapture
-    /// lifecycle_cost`.
+    /// Allocate, retain, release and free objects of a compiled class, as a
+    /// guest's own are, on every core at once. Run with `cargo test --release
+    /// -p objc -- --ignored --nocapture lifecycle_cost`.
     #[test]
     #[ignore = "a benchmark, not a check"]
     fn lifecycle_cost() {
         const ROUNDS: usize = 500_000;
         crate::bootstrap();
-        let nsobject = crate::class::lookup(c"NSObject").expect("NSObject");
+        // Dispatch's refcount is installed in any program that runs a queue.
+        set_os_object_refcount(OsObjectRefcount {
+            retain: |_| {},
+            release: |_| {},
+            count: |_| 1,
+        });
+        let (_, _, class) = crate::class::tests::adopt_under_nsobject(
+            c"RosemaryLifecycleCompiled",
+            crate::class::tests::COMPILED_RO,
+        );
+        crate::class::register_pair(class);
         // A program of any size has some weak references and associations
         // somewhere, so neither table is empty while the objects come and go.
-        let keeper = crate::object::create_instance(nsobject, 0);
+        let keeper = crate::object::create_instance(class, 0);
         let mut slot: Id = std::ptr::null_mut();
         store_weak(&mut slot, keeper);
         set_associated(keeper, std::ptr::dangling(), keeper);
@@ -623,7 +633,7 @@ mod lifetime_tests {
             for _ in 0..threads {
                 scope.spawn(|| {
                     for _ in 0..ROUNDS {
-                        let object = crate::object::create_instance(nsobject, 0);
+                        let object = crate::object::create_instance(class, 0);
                         retain(std::hint::black_box(object));
                         release(object);
                         release(object);
