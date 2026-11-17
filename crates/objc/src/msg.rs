@@ -31,7 +31,7 @@ unsafe extern "C" fn lookup(receiver: Id, sel: Sel, slot: *mut Id) -> *const c_v
 }
 
 /// Every send [`msg_send`] resolved, cached by the receiver's class and the
-/// selector, which its x86-64 prologue probes before it saves a register.
+/// selector, which its prologue probes before it saves a register.
 ///
 /// A message from a game is a Metal or Foundation call, tens of thousands a
 /// frame; spilling every argument register to ask Rust was most of their cost.
@@ -47,6 +47,18 @@ mod sends {
     pub(super) const BITS: u32 = 12;
     /// The probe's `imul` takes a sign-extended 32-bit immediate.
     pub(super) const MULTIPLIER: i32 = -1_640_531_535;
+    /// [`MULTIPLIER`] sign-extended, as the 16-bit pieces AArch64's `movz` and
+    /// `movk` build it from.
+    #[cfg(target_arch = "aarch64")]
+    pub(super) const MULTIPLIER_CHUNKS: [u16; 4] = {
+        let wide = MULTIPLIER as i64 as u64;
+        [
+            wide as u16,
+            (wide >> 16) as u16,
+            (wide >> 32) as u16,
+            (wide >> 48) as u16,
+        ]
+    };
 
     #[repr(C, align(32))]
     pub(super) struct Entry {
@@ -102,7 +114,7 @@ mod sends {
         imp: *const c_void,
         generation: usize,
     ) {
-        if !cfg!(target_arch = "x86_64") || crate::debug::enabled() {
+        if !cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) || crate::debug::enabled() {
             return;
         }
         // SAFETY: the trampoline's spill slot, by the caller.
@@ -399,9 +411,37 @@ pub fn entry_stret() -> *const c_void {
 #[unsafe(naked)]
 unsafe extern "C" fn msg_send() {
     // x0 = receiver, x1 = selector, x2-x7 and v0-v7 the rest, x8 an indirect
-    // return buffer. All of them have to survive the lookup call.
+    // return buffer. All of them have to survive the lookup call; the probe
+    // uses only x9-x17, which a call may clobber anyway.
     core::arch::naked_asm!(
         "cbz     x0, 9f",
+        "ldr     x9, [x0]",
+        // A forgotten or empty entry's class is zero.
+        "cbz     x9, 8f",
+        "eor     x10, x1, x9, lsl #7",
+        "movz    x11, #{m0}",
+        "movk    x11, #{m1}, lsl #16",
+        "movk    x11, #{m2}, lsl #32",
+        "movk    x11, #{m3}, lsl #48",
+        "mul     x10, x10, x11",
+        "lsr     x10, x10, #{shift}",
+        "adrp    x11, {table}",
+        "add     x11, x11, :lo12:{table}",
+        "add     x11, x11, x10, lsl #5",
+        // Unlike x86-64, loads may be reordered: the sequence is read with
+        // acquire, and the entry's loads are fenced before it is read again.
+        "ldar    x12, [x11]",
+        "tbnz    x12, #0, 8f",
+        "ldp     x13, x14, [x11, #8]",
+        "ldr     x17, [x11, #24]",
+        "dmb     ishld",
+        "ldr     x15, [x11]",
+        "cmp     x13, x9",
+        "ccmp    x14, x1, #0, eq",
+        "ccmp    x15, x12, #0, eq",
+        "b.ne    8f",
+        "br      x17",
+        "8:",
         "stp     x29, x30, [sp, #-16]!",
         "mov     x29, sp",
         "sub     sp, sp, #208",
@@ -439,6 +479,12 @@ unsafe extern "C" fn msg_send() {
         "movi    d3, #0",
         "ret",
         lookup = sym lookup,
+        table = sym sends::TABLE,
+        m0 = const sends::MULTIPLIER_CHUNKS[0],
+        m1 = const sends::MULTIPLIER_CHUNKS[1],
+        m2 = const sends::MULTIPLIER_CHUNKS[2],
+        m3 = const sends::MULTIPLIER_CHUNKS[3],
+        shift = const 64 - sends::BITS,
     )
 }
 
@@ -1073,7 +1119,7 @@ mod tests {
         let instance = crate::object::create_instance(class, 0);
         assert_eq!(send_answer(instance, sel), 1);
         assert_eq!(send_answer(instance, sel), 1);
-        if cfg!(target_arch = "x86_64") {
+        if cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
             assert_eq!(
                 sends::cached(isa(instance), sel as usize),
                 Some(answer_one as *const () as usize)
