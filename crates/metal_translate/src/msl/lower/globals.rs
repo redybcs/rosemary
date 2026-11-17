@@ -4,7 +4,7 @@ use super::*;
 
 impl Context<'_> {
     pub(super) fn lower_globals(&mut self, module: &mut Module) -> Result<()> {
-        let mut indices = std::collections::HashSet::new();
+        let mut indices = crate::hash::HashSet::default();
         for global in &self.program.globals {
             if global.function_constant.is_some() && global.init.is_some() {
                 return Err(syntax_error(

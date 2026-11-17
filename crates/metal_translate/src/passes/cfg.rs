@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::hash::HashSet;
 
 use crate::ir::{Function, InstructionKind, successors};
 
@@ -6,12 +6,12 @@ pub(super) fn run(function: &mut Function) -> bool {
     let Some(entry) = function.blocks.first().map(|block| block.id) else {
         return false;
     };
-    let terminators: std::collections::HashMap<_, _> = function
+    let terminators: crate::hash::HashMap<_, _> = function
         .blocks
         .iter()
         .map(|block| (block.id, &block.terminator))
         .collect();
-    let mut reachable = HashSet::from([entry]);
+    let mut reachable = HashSet::from_iter([entry]);
     let mut worklist = vec![entry];
     while let Some(block) = worklist.pop() {
         let Some(terminator) = terminators.get(&block) else {

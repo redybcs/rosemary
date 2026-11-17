@@ -7,7 +7,7 @@ mod memory;
 mod sync;
 mod texture;
 
-use std::collections::HashSet;
+use crate::hash::HashSet;
 
 use super::*;
 
@@ -76,24 +76,24 @@ impl Emitter {
             uses_int64: false,
             uses_variable_pointers: None,
             builder,
-            capabilities: HashSet::from([Capability::Shader]),
-            extensions: HashSet::new(),
+            capabilities: HashSet::from_iter([Capability::Shader]),
+            extensions: HashSet::default(),
             booleans: [None; 2],
-            types: HashMap::new(),
-            constants: HashMap::new(),
-            composites: HashMap::new(),
-            buffer_types: HashMap::new(),
+            types: HashMap::default(),
+            constants: HashMap::default(),
+            composites: HashMap::default(),
+            buffer_types: HashMap::default(),
             interface: Vec::new(),
-            parameter_pointers: HashMap::new(),
-            globals: HashMap::new(),
-            pointer_storage: HashMap::new(),
-            unlaid_types: HashMap::new(),
-            unlaid_composites: HashMap::new(),
-            undefs: HashMap::new(),
+            parameter_pointers: HashMap::default(),
+            globals: HashMap::default(),
+            pointer_storage: HashMap::default(),
+            unlaid_types: HashMap::default(),
+            unlaid_composites: HashMap::default(),
+            undefs: HashMap::default(),
             global_invocation_id: None,
             glsl_std_450,
-            stage_inputs: HashMap::new(),
-            signed_inputs: HashMap::new(),
+            stage_inputs: HashMap::default(),
+            signed_inputs: HashMap::default(),
             stage_outputs: Vec::new(),
             return_type: None,
             writes_depth: false,

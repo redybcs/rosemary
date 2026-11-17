@@ -13,7 +13,7 @@ mod library;
 mod matrix;
 mod pointer;
 
-use std::collections::HashMap;
+use crate::hash::HashMap;
 
 use super::ast::*;
 use super::syntax_error;
@@ -97,7 +97,7 @@ impl<'p> Context<'p> {
         let mut context = Context {
             program,
             layouts: Vec::new(),
-            globals: HashMap::new(),
+            globals: HashMap::default(),
         };
         for index in 0..program.structs.len() {
             let layout = context.layout_struct(index)?;
@@ -592,7 +592,7 @@ impl<'c, 'p> Lowerer<'c, 'p> {
             current: 0,
             terminated: false,
             locals: Vec::new(),
-            scopes: vec![HashMap::new()],
+            scopes: vec![HashMap::default()],
             loops: Vec::new(),
             returns: Returns::Void,
             result: Type::Void,
@@ -764,7 +764,7 @@ impl<'c, 'p> Lowerer<'c, 'p> {
     }
 
     fn statements(&mut self, statements: &[Stmt]) -> Result<()> {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(HashMap::default());
         for statement in statements {
             self.statement(statement)?;
         }
@@ -1022,7 +1022,7 @@ impl<'c, 'p> Lowerer<'c, 'p> {
                 step,
                 body,
             } => {
-                self.scopes.push(HashMap::new());
+                self.scopes.push(HashMap::default());
                 for statement in init {
                     self.statement(statement)?;
                 }
@@ -1159,7 +1159,7 @@ impl<'c, 'p> Lowerer<'c, 'p> {
         }
         self.terminate(Terminator::Branch(otherwise));
         // The whole body is one scope, as in C++.
-        self.scopes.push(HashMap::new());
+        self.scopes.push(HashMap::default());
         self.loops.push(BreakTarget::Switch(exit));
         let mut lowered = Ok(());
         for (index, case) in cases.iter().enumerate() {

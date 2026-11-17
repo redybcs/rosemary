@@ -331,7 +331,7 @@ pub(super) struct Program {
     pub inline_samplers: Vec<crate::ir::InlineSampler>,
     /// Each enumerator: its value and its enumeration's underlying type,
     /// which stands in for the enumeration.
-    pub enumerators: std::collections::HashMap<String, (u64, Scalar)>,
+    pub enumerators: crate::hash::HashMap<String, (u64, Scalar)>,
     /// Declarations which could not be parsed. Only what uses one fails.
     pub failed: Vec<FailedItem>,
 }

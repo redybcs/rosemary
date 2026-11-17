@@ -10,7 +10,7 @@ mod validate;
 
 pub(crate) use validate::{function_constant_dependencies, reject_undefined_entries};
 
-use std::collections::HashMap;
+use crate::hash::HashMap;
 
 use crate::ir::{
     Access, AddressSpace, Block, BlockId, ConvertOp, EntryPoint, FloatBinaryOp, Function,
@@ -166,7 +166,7 @@ fn parse_kernel(
     let mut resources = Vec::new();
     let mut function_parameters = Vec::new();
     let mut values = Vec::new();
-    let mut builtins = HashMap::new();
+    let mut builtins = HashMap::default();
     for raw in split_parameters(parameters) {
         // Search from this kernel, not from the start of the library: two
         // kernels may declare a parameter with identical text, and a

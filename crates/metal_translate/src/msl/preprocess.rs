@@ -5,7 +5,7 @@
 //! Output keeps every line where it was, so a diagnostic names the line of the
 //! source the guest handed over.
 
-use std::collections::{HashMap, HashSet};
+use crate::hash::{HashMap, HashSet};
 
 use super::syntax_error;
 use crate::TranslateError;
@@ -54,7 +54,7 @@ pub(super) fn preprocess(
     source: &str,
     macros: &[(String, String)],
 ) -> Result<String, TranslateError> {
-    let mut table: HashMap<String, Macro> = HashMap::new();
+    let mut table: HashMap<String, Macro> = HashMap::default();
     for (name, body) in PREDEFINED {
         table.insert(
             (*name).to_string(),
@@ -149,7 +149,7 @@ pub(super) fn preprocess(
                 }
             }
         } else if active {
-            output.push_str(&expand(line, &table, &HashSet::new(), line_number)?);
+            output.push_str(&expand(line, &table, &HashSet::default(), line_number)?);
         }
         output.push('\n');
         // A line joined with a continuation still accounts for its lines.
@@ -472,7 +472,7 @@ fn evaluate(
         rest = remainder;
     }
     resolved.push_str(rest);
-    let expanded = expand(&resolved, table, &HashSet::new(), line)?;
+    let expanded = expand(&resolved, table, &HashSet::default(), line)?;
     let tokens = super::lex::lex(&expanded, line)?;
     let mut parser = Condition {
         tokens: &tokens,

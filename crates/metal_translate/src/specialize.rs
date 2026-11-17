@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use crate::hash::HashMap;
+use std::collections::BTreeMap;
 
 use crate::ir::{
     AddressSpace, Function, GlobalVariable, InstructionKind, Module, Operand, Terminator, Type,
@@ -316,8 +317,8 @@ fn run_initializer(
         return Ok(());
     };
     let mut previous = None;
-    let mut known: HashMap<ValueId, Operand> = HashMap::new();
-    let mut locals: HashMap<ValueId, Operand> = HashMap::new();
+    let mut known: HashMap<ValueId, Operand> = HashMap::default();
+    let mut locals: HashMap<ValueId, Operand> = HashMap::default();
     let resolve = |known: &HashMap<ValueId, Operand>, operand: &Operand| match operand {
         Operand::Value(value) => known.get(value).cloned().unwrap_or_else(|| operand.clone()),
         other => other.clone(),

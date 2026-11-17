@@ -226,7 +226,7 @@ fn clone_region(
             (*block, cloned)
         })
         .collect();
-    let mut value_map = HashMap::new();
+    let mut value_map = HashMap::default();
     for block in function
         .blocks
         .iter()

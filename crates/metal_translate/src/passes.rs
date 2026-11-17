@@ -3,7 +3,7 @@ mod dce;
 mod fold;
 mod phi;
 
-use std::collections::HashMap;
+use crate::hash::HashMap;
 use std::sync::LazyLock;
 
 use crate::ir::{

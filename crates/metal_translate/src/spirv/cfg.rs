@@ -11,8 +11,8 @@ impl ControlFlow {
     pub(super) fn new(function: &Function) -> Self {
         let mut graph = Self {
             blocks: function.blocks.iter().map(|block| block.id).collect(),
-            successors: HashMap::new(),
-            predecessors: HashMap::new(),
+            successors: HashMap::default(),
+            predecessors: HashMap::default(),
         };
         for block in &function.blocks {
             let successors = successors_of(&block.terminator);
@@ -112,7 +112,7 @@ pub(super) fn control_flow_merges(
         };
         loops.push((block.id, body, merge, *continue_target));
     }
-    let mut merges = HashMap::new();
+    let mut merges = HashMap::default();
     for (header, _, merge, continue_target) in &loops {
         merges.insert(
             *header,

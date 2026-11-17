@@ -572,7 +572,7 @@ impl Lowerer<'_, '_> {
     ) -> Result<Value> {
         // Re-enter `call` with values already evaluated, by binding them to
         // names nothing in the source can spell.
-        self.scopes.push(HashMap::new());
+        self.scopes.push(HashMap::default());
         let args = values
             .iter()
             .enumerate()

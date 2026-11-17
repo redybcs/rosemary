@@ -396,7 +396,7 @@ fn static_initializers(
         }
         let body = function_blocks[position];
         let table = values::ValueTable::decode(module_block, body, types, parameters)?;
-        let no_opaque_types = HashMap::new();
+        let no_opaque_types = HashMap::default();
         initializers.push(table.lower_body(
             body,
             types,
@@ -741,7 +741,7 @@ fn resolve_function_name(
 
 fn legacy_function_names(module_block: &BitcodeBlock) -> HashMap<usize, String> {
     let Some(symbol_table) = child_block(&module_block.elements, 14) else {
-        return HashMap::new();
+        return HashMap::default();
     };
     symbol_table
         .elements

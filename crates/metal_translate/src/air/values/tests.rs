@@ -393,11 +393,11 @@ fn lowers_extractelement_36_98_using_values_not_record_pattern() {
             &body,
             &types,
             &Signature {
-                names: &HashMap::new(),
+                names: &HashMap::default(),
                 name: "extract".into(),
                 parameter_types: &[1],
                 result_type: 0,
-                opaque_types: &HashMap::new(),
+                opaque_types: &HashMap::default(),
             },
         )
         .unwrap();
@@ -464,11 +464,11 @@ fn a_switch_expands_into_a_chain_of_comparisons() {
             &body,
             &types,
             &Signature {
-                names: &HashMap::new(),
+                names: &HashMap::default(),
                 name: "choose".into(),
                 parameter_types: &[],
                 result_type: 2,
-                opaque_types: &HashMap::new(),
+                opaque_types: &HashMap::default(),
             },
         )
         .unwrap();
@@ -547,11 +547,11 @@ fn lowers_multiple_blocks_with_a_phi_and_a_forward_reference() {
             &body,
             &types,
             &Signature {
-                names: &HashMap::new(),
+                names: &HashMap::default(),
                 name: "loop".into(),
                 parameter_types: &[],
                 result_type: 2,
-                opaque_types: &HashMap::new(),
+                opaque_types: &HashMap::default(),
             },
         )
         .unwrap();
@@ -616,11 +616,11 @@ fn rejects_a_forward_reference_whose_declared_type_is_wrong() {
                 &body,
                 &types,
                 &Signature {
-                    names: &HashMap::new(),
+                    names: &HashMap::default(),
                     name: "bad".into(),
                     parameter_types: &[],
                     result_type: 2,
-                    opaque_types: &HashMap::new(),
+                    opaque_types: &HashMap::default(),
                 },
             )
             .is_err()
@@ -645,11 +645,11 @@ fn lowers_integer_resize_and_checks_its_direction() {
             &body,
             &types,
             &Signature {
-                names: &HashMap::new(),
+                names: &HashMap::default(),
                 name: "extend".into(),
                 parameter_types: &[0],
                 result_type: 1,
-                opaque_types: &HashMap::new(),
+                opaque_types: &HashMap::default(),
             },
         )
         .unwrap();
@@ -668,11 +668,11 @@ fn lowers_integer_resize_and_checks_its_direction() {
                 &body,
                 &types,
                 &Signature {
-                    names: &HashMap::new(),
+                    names: &HashMap::default(),
                     name: "bad".into(),
                     parameter_types: &[0],
                     result_type: 1,
-                    opaque_types: &HashMap::new(),
+                    opaque_types: &HashMap::default(),
                 }
             )
             .is_err()
@@ -704,11 +704,11 @@ fn lowers_a_modern_load_with_an_explicit_result_type() {
             &body,
             &types,
             &Signature {
-                names: &HashMap::new(),
+                names: &HashMap::default(),
                 name: "load".into(),
                 parameter_types: &[1],
                 result_type: 0,
-                opaque_types: &HashMap::new(),
+                opaque_types: &HashMap::default(),
             },
         )
         .unwrap();
@@ -724,11 +724,11 @@ fn lowers_a_modern_load_with_an_explicit_result_type() {
                 &bad,
                 &types,
                 &Signature {
-                    names: &HashMap::new(),
+                    names: &HashMap::default(),
                     name: "bad".into(),
                     parameter_types: &[1],
                     result_type: 0,
-                    opaque_types: &HashMap::new(),
+                    opaque_types: &HashMap::default(),
                 },
             )
             .is_err()
@@ -766,11 +766,11 @@ fn extraction_uses_constant_contents_and_rejects_bad_indices() {
             &body,
             &types,
             &Signature {
-                names: &HashMap::new(),
+                names: &HashMap::default(),
                 name: "lane2".into(),
                 parameter_types: &[1],
                 result_type: 0,
-                opaque_types: &HashMap::new(),
+                opaque_types: &HashMap::default(),
             },
         )
         .unwrap();
@@ -784,11 +784,11 @@ fn extraction_uses_constant_contents_and_rejects_bad_indices() {
                 &body,
                 &types,
                 &Signature {
-                    names: &HashMap::new(),
+                    names: &HashMap::default(),
                     name: "bad".into(),
                     parameter_types: &[1],
                     result_type: 0,
-                    opaque_types: &HashMap::new(),
+                    opaque_types: &HashMap::default(),
                 }
             )
             .is_err()
@@ -799,11 +799,11 @@ fn extraction_uses_constant_contents_and_rejects_bad_indices() {
                 &body,
                 &types,
                 &Signature {
-                    names: &HashMap::new(),
+                    names: &HashMap::default(),
                     name: "bad".into(),
                     parameter_types: &[1],
                     result_type: 0,
-                    opaque_types: &HashMap::new(),
+                    opaque_types: &HashMap::default(),
                 }
             )
             .is_err()
