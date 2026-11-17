@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock, RwLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::address::AddressMap;
+use crate::address::{AddressMap, ShardedAddressMap};
 use crate::object::Id;
 
 const SHARDS: usize = 64;
@@ -286,8 +286,7 @@ fn no_pool() {
 }
 
 /// Every live `__weak` slot, by the object it points at.
-static WEAK: LazyLock<RwLock<HashMap<usize, Vec<usize>>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+static WEAK: ShardedAddressMap<Vec<usize>> = ShardedAddressMap::new();
 
 /// Point `slot` at `object`, registering it to be zeroed on deallocation.
 pub fn store_weak(slot: *mut Id, object: Id) -> Id {
@@ -296,8 +295,7 @@ pub fn store_weak(slot: *mut Id, object: Id) -> Id {
     // SAFETY: the caller owns `slot`, which is a word of its own storage.
     unsafe { *slot = object };
     if !object.is_null() {
-        WEAK.write()
-            .unwrap_or_else(|e| e.into_inner())
+        WEAK.write(object as usize)
             .entry(object as usize)
             .or_default()
             .push(slot as usize);
@@ -328,8 +326,7 @@ pub fn init_weak(slot: *mut Id, object: Id) -> Id {
     // SAFETY: the caller supplies a writable word of uninitialized storage.
     unsafe { *slot = object };
     if !object.is_null() {
-        WEAK.write()
-            .unwrap_or_else(|e| e.into_inner())
+        WEAK.write(object as usize)
             .entry(object as usize)
             .or_default()
             .push(slot as usize);
@@ -343,9 +340,12 @@ fn unregister_weak(slot: *mut Id) {
     if object.is_null() {
         return;
     }
-    let mut guard = WEAK.write().unwrap_or_else(|e| e.into_inner());
+    let mut guard = WEAK.write(object as usize);
     if let Some(slots) = guard.get_mut(&(object as usize)) {
         slots.retain(|s| *s != slot as usize);
+        if slots.is_empty() {
+            guard.remove(&(object as usize));
+        }
     }
     drop(guard);
     unsafe { *slot = std::ptr::null_mut() };
@@ -353,11 +353,7 @@ fn unregister_weak(slot: *mut Id) {
 
 /// Zero every weak slot that pointed at `object`.
 fn clear_weak_references(object: Id) {
-    let Some(slots) = WEAK
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&(object as usize))
-    else {
+    let Some(slots) = WEAK.write(object as usize).remove(&(object as usize)) else {
         return;
     };
     for slot in slots {
@@ -369,8 +365,7 @@ fn clear_weak_references(object: Id) {
 }
 
 /// One recursive lock per object, created on first use and never reclaimed.
-static MONITORS: LazyLock<Mutex<HashMap<usize, &'static Monitor>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static MONITORS: ShardedAddressMap<&'static Monitor> = ShardedAddressMap::new();
 
 /// A recursive mutex, which is what `@synchronized` needs and what a plain
 /// `Mutex` is not: the same thread may enter twice.
@@ -380,13 +375,18 @@ struct Monitor {
 }
 
 fn monitor(object: Id) -> &'static Monitor {
-    let mut guard = MONITORS.lock().unwrap_or_else(|e| e.into_inner());
-    guard.entry(object as usize).or_insert_with(|| {
-        Box::leak(Box::new(Monitor {
-            owner: Mutex::new(None),
-            condition: std::sync::Condvar::new(),
-        }))
-    })
+    if let Some(monitor) = MONITORS.read(object as usize).get(&(object as usize)) {
+        return monitor;
+    }
+    MONITORS
+        .write(object as usize)
+        .entry(object as usize)
+        .or_insert_with(|| {
+            Box::leak(Box::new(Monitor {
+                owner: Mutex::new(None),
+                condition: std::sync::Condvar::new(),
+            }))
+        })
 }
 
 fn thread_id() -> u64 {
@@ -455,11 +455,10 @@ pub fn sync_exit(object: Id) {
 ///
 /// Addresses rather than pointers, so the table is `Send` without an assertion
 /// this crate would then have to justify.
-static ASSOCIATIONS: LazyLock<RwLock<HashMap<usize, Associations>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+static ASSOCIATIONS: ShardedAddressMap<Associations> = ShardedAddressMap::new();
 
 /// One object's associations: by key, the value and whether it is owned.
-type Associations = HashMap<usize, (usize, bool)>;
+type Associations = AddressMap<(usize, bool)>;
 
 /// Set once anything is associated, so the many objects freed in a program
 /// that never associates anything skip the table.
@@ -498,7 +497,7 @@ pub fn set_associated_with_policy(object: Id, key: *const c_void, value: Id, pol
     };
     ANY_ASSOCIATED.store(true, std::sync::atomic::Ordering::Release);
     let previous = {
-        let mut map = ASSOCIATIONS.write().unwrap_or_else(|e| e.into_inner());
+        let mut map = ASSOCIATIONS.write(object as usize);
         let entries = map.entry(object as usize).or_default();
         let previous = match value.is_null() {
             true => entries.remove(&(key as usize)),
@@ -525,7 +524,7 @@ pub fn set_associated_word(object: Id, key: *const c_void, word: usize) {
         return;
     }
     ANY_ASSOCIATED.store(true, std::sync::atomic::Ordering::Release);
-    let mut map = ASSOCIATIONS.write().unwrap_or_else(|e| e.into_inner());
+    let mut map = ASSOCIATIONS.write(object as usize);
     let entries = map.entry(object as usize).or_default();
     match word {
         0 => entries.remove(&(key as usize)),
@@ -542,8 +541,7 @@ pub fn remove_associated(object: Id) {
         return;
     }
     let removed = ASSOCIATIONS
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
+        .write(object as usize)
         .remove(&(object as usize));
     for (value, owned) in removed
         .into_iter()
@@ -558,8 +556,7 @@ pub fn remove_associated(object: Id) {
 pub fn associated(object: Id, key: *const c_void) -> Id {
     crate::debug::validate(object, "objc_getAssociatedObject");
     ASSOCIATIONS
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
+        .read(object as usize)
         .get(&(object as usize))
         .and_then(|entries| entries.get(&(key as usize)))
         .map_or(std::ptr::null_mut(), |(v, _)| *v as Id)
@@ -603,5 +600,41 @@ mod lifetime_tests {
         assert_eq!(DEALLOCATED.load(Ordering::SeqCst), 0);
         release(object);
         assert_eq!(DEALLOCATED.load(Ordering::SeqCst), 1);
+    }
+
+    /// Allocate, retain, release and free plain objects on every core at
+    /// once. Run with `cargo test --release -p objc -- --ignored --nocapture
+    /// lifecycle_cost`.
+    #[test]
+    #[ignore = "a benchmark, not a check"]
+    fn lifecycle_cost() {
+        const ROUNDS: usize = 500_000;
+        crate::bootstrap();
+        let nsobject = crate::class::lookup(c"NSObject").expect("NSObject");
+        // A program of any size has some weak references and associations
+        // somewhere, so neither table is empty while the objects come and go.
+        let keeper = crate::object::create_instance(nsobject, 0);
+        let mut slot: Id = std::ptr::null_mut();
+        store_weak(&mut slot, keeper);
+        set_associated(keeper, std::ptr::dangling(), keeper);
+        let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
+        let start = std::time::Instant::now();
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                scope.spawn(|| {
+                    for _ in 0..ROUNDS {
+                        let object = crate::object::create_instance(nsobject, 0);
+                        retain(std::hint::black_box(object));
+                        release(object);
+                        release(object);
+                    }
+                });
+            }
+        });
+        eprintln!(
+            "lifecycle: {:.2} ns per object, {threads} threads",
+            start.elapsed().as_nanos() as f64 / (ROUNDS * threads) as f64
+        );
+        destroy_weak(&mut slot);
     }
 }
