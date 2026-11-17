@@ -13,8 +13,8 @@ pub(super) fn parse(tokens: &[Token]) -> Result<Program> {
         program: Program::default(),
         file_samplers: Vec::new(),
         local_samplers: Vec::new(),
-        aliases: std::collections::HashMap::new(),
-        array_templates: std::collections::HashSet::new(),
+        aliases: crate::hash::HashMap::default(),
+        array_templates: crate::hash::HashSet::default(),
         type_params: Vec::new(),
         value_params: Vec::new(),
     };
@@ -32,10 +32,10 @@ struct Parser<'a> {
     /// Those declared in the function being parsed.
     local_samplers: Vec<(String, usize, usize)>,
     /// `typedef` names of types other than structures.
-    aliases: std::collections::HashMap<String, Ty>,
+    aliases: crate::hash::HashMap<String, Ty>,
     /// Class templates which are an array of `N` `T`s and nothing more, as
     /// SPIRV-Cross's `spvUnsafeArray` is: an array with value semantics.
-    array_templates: std::collections::HashSet<String>,
+    array_templates: crate::hash::HashSet<String>,
     /// The type parameters of the function template being parsed.
     type_params: Vec<String>,
     value_params: Vec<(String, Scalar)>,

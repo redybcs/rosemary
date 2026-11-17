@@ -10,7 +10,8 @@ use structurize::{
     reverse_post_order, separate_loop_latches, single_exit, split_shared_merges,
 };
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use crate::hash::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rspirv::binary::Assemble;
 use rspirv::dr::{Builder, InsertPoint, Operand as SpirvOperand};

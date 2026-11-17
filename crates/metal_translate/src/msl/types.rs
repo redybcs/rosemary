@@ -81,7 +81,7 @@ pub(super) fn parse_parameter_type(
 }
 
 pub(super) fn parse_structs(source: &str) -> Result<HashMap<String, Type>, TranslateError> {
-    let mut structs = HashMap::new();
+    let mut structs = HashMap::default();
     let mut remaining = source;
     while let Some(start) = remaining.find("struct ") {
         remaining = &remaining[start + "struct ".len()..];

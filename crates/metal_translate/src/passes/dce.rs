@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::hash::{HashMap, HashSet};
 
 use super::operand_values;
 use crate::ir::{
@@ -9,7 +9,7 @@ use crate::ir::{
 type Site = (usize, usize);
 
 pub(super) fn run(function: &mut Function) -> bool {
-    let mut definitions: HashMap<ValueId, Site> = HashMap::new();
+    let mut definitions: HashMap<ValueId, Site> = HashMap::default();
     for (b, block) in function.blocks.iter().enumerate() {
         for (i, instruction) in block.instructions.iter().enumerate() {
             if let Some(result) = instruction.result {
@@ -19,7 +19,7 @@ pub(super) fn run(function: &mut Function) -> bool {
     }
     let unread = unread_local_stores(function);
 
-    let mut live: HashSet<Site> = HashSet::new();
+    let mut live: HashSet<Site> = HashSet::default();
     let mut worklist: Vec<Site> = Vec::new();
     let mark = |operand: &Operand, live: &mut HashSet<Site>, worklist: &mut Vec<Site>| {
         operand_values(operand, &mut |value| {
@@ -77,7 +77,7 @@ fn has_effect(kind: &InstructionKind) -> bool {
 /// store writes through. Passing the address anywhere else - a load, an
 /// atomic, a phi, a select, a store of the pointer itself - is a read.
 fn unread_local_stores(function: &Function) -> HashSet<Site> {
-    let mut stores = HashSet::new();
+    let mut stores = HashSet::default();
     let locals: Vec<ValueId> = function
         .blocks
         .iter()
@@ -89,8 +89,8 @@ fn unread_local_stores(function: &Function) -> HashSet<Site> {
         return stores;
     }
 
-    let mut uses: HashMap<ValueId, Vec<Site>> = HashMap::new();
-    let mut escaping: HashSet<ValueId> = HashSet::new();
+    let mut uses: HashMap<ValueId, Vec<Site>> = HashMap::default();
+    let mut escaping: HashSet<ValueId> = HashSet::default();
     for (b, block) in function.blocks.iter().enumerate() {
         for (i, instruction) in block.instructions.iter().enumerate() {
             for operand in instruction_operands(&instruction.kind) {

@@ -131,7 +131,7 @@ impl ValueTable {
             values: Vec::new(),
             blocks: Vec::new(),
         };
-        let mut operands = HashMap::new();
+        let mut operands = HashMap::default();
         for (index, &ty) in parameter_types.iter().enumerate() {
             // An opaque LLVM argument is a Metal texture or sampler; its
             // shape is only in metadata. Any other argument keeps its LLVM
@@ -173,8 +173,8 @@ impl ValueTable {
             names,
             function,
             operands,
-            forward: HashMap::new(),
-            aliases: HashMap::new(),
+            forward: HashMap::default(),
+            aliases: HashMap::default(),
             phi_fixups: Vec::new(),
             switches: Vec::new(),
             instructions: Vec::new(),

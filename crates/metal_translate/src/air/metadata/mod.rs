@@ -41,7 +41,7 @@ impl Metadata {
         types: &[DecodedType],
     ) -> Result<Self, TranslateError> {
         let mut values = Vec::new();
-        let mut named = HashMap::new();
+        let mut named = HashMap::default();
         let mut pending_name: Option<String> = None;
         for block in module_block
             .elements

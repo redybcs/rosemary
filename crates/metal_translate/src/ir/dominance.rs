@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::hash::HashMap;
 
 use super::BlockId;
 
@@ -22,7 +22,7 @@ impl Dominance {
     /// shader whose entry point inlines to a few thousand blocks makes the set
     /// form quadratic in both time and memory.
     pub(crate) fn new(roots: &[BlockId], edges: &HashMap<BlockId, Vec<BlockId>>) -> Self {
-        let mut forward: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+        let mut forward: HashMap<BlockId, Vec<BlockId>> = HashMap::default();
         for (block, incoming) in edges {
             for source in incoming {
                 forward.entry(*source).or_default().push(*block);
@@ -117,7 +117,7 @@ impl Dominance {
 /// tree. Every block of `order` is in `idom`, and every tree is rooted at a
 /// block which names itself.
 fn spans(order: &[BlockId], idom: &HashMap<BlockId, BlockId>) -> HashMap<BlockId, (u32, u32)> {
-    let mut children: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+    let mut children: HashMap<BlockId, Vec<BlockId>> = HashMap::default();
     let mut tree_roots = Vec::new();
     // In reverse post-order, so the numbering does not depend on hash order.
     for block in order {
@@ -126,7 +126,7 @@ fn spans(order: &[BlockId], idom: &HashMap<BlockId, BlockId>) -> HashMap<BlockId
             _ => tree_roots.push(*block),
         }
     }
-    let mut spans = HashMap::with_capacity(order.len());
+    let mut spans = HashMap::with_capacity_and_hasher(order.len(), Default::default());
     let mut clock = 0u32;
     for root in tree_roots {
         let mut stack = vec![(root, 0usize)];

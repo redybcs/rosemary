@@ -53,7 +53,7 @@ pub(super) fn parse_text(text: &str) -> Result<Module, TranslateError> {
         .map(|(index, name)| (name.clone(), BlockId(index as u32)))
         .collect();
 
-    let mut value_ids = HashMap::new();
+    let mut value_ids = HashMap::default();
     let mut values = Vec::new();
     let mut parameters = Vec::new();
     for (name, ty) in parameter_specs {

@@ -1,5 +1,6 @@
 pub mod air;
 pub mod cache;
+mod hash;
 pub mod ir;
 pub mod msl;
 pub mod passes;

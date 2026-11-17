@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use crate::hash::HashMap;
+use std::collections::BTreeMap;
 
 use llvm_bitcode::Bitcode;
 use llvm_bitcode::bitcode::{BitcodeElement, Block as BitcodeBlock, Payload};

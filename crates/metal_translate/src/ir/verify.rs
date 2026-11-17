@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::hash::HashMap;
 
 use super::*;
 use crate::{Diagnostic, Phase};

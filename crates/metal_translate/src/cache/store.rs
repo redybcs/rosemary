@@ -191,7 +191,7 @@ fn writer() -> Option<&'static Writer> {
             let state = Arc::new(WriterState {
                 inner: Mutex::new(WriterStateInner {
                     accepting: true,
-                    pending: HashMap::new(),
+                    pending: HashMap::default(),
                 }),
                 drained: Condvar::new(),
             });

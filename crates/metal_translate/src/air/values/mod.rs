@@ -309,7 +309,7 @@ impl ValueTable {
         names: &HashMap<usize, String>,
         sections: &[String],
     ) -> Result<Vec<crate::ir::GlobalVariable>, TranslateError> {
-        let mut operands = HashMap::new();
+        let mut operands = HashMap::default();
         self.globals
             .iter()
             .map(|global| {

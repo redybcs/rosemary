@@ -201,7 +201,7 @@ impl<'p> Lowerer<'_, 'p> {
                 ));
             }
         };
-        self.scopes.push(HashMap::new());
+        self.scopes.push(HashMap::default());
         let prepared = bindings
             .into_iter()
             .enumerate()
@@ -238,9 +238,9 @@ impl<'p> Lowerer<'_, 'p> {
         }
         // Arguments are evaluated in the caller's scope, before the callee's
         // replaces it.
-        let mut scope = HashMap::new();
-        let mut types = HashMap::new();
-        let mut values = HashMap::new();
+        let mut scope = HashMap::default();
+        let mut types = HashMap::default();
+        let mut values = HashMap::default();
         for (param, arg) in function.params.iter().zip(args) {
             let binding = self.argument(param, arg, &mut types, &mut values)?;
             scope.insert(param.name.clone(), binding);

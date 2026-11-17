@@ -3,7 +3,7 @@ mod store;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use crate::hash::HashMap;
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
