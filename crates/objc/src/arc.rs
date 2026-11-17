@@ -38,9 +38,11 @@ pub fn set_os_object_refcount(refcount: OsObjectRefcount) {
 /// The refcount `object` uses, if it is an `OS_object`.
 fn os_object_refcount(object: Id) -> Option<&'static OsObjectRefcount> {
     let refcount = OS_OBJECT_REFCOUNT.get()?;
+    // The `isa` compared, not resolved to a class: the one class this asks
+    // about is this runtime's own, so nothing else is it.
     // SAFETY: a live object, whose first word is the `isa`.
-    let class = unsafe { crate::object::class_of(object) }?;
-    std::ptr::eq(class, crate::class::os_object_class()).then_some(refcount)
+    let isa = unsafe { crate::object::isa(object) };
+    std::ptr::eq(isa, crate::class::ptr(crate::class::os_object_class())).then_some(refcount)
 }
 
 /// Where `object` of a class counted inline keeps its extra references.
