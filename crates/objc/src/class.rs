@@ -220,37 +220,23 @@ static ARENA: AtomicUsize = AtomicUsize::new(0);
 static BUILT: AtomicUsize = AtomicUsize::new(0);
 static BUILDING: Mutex<()> = Mutex::new(());
 /// Classes outside the arena: those built past it, and compiled classes
-/// adopted where an image put them. Sharded like the refcounts, because retain
-/// and release ask [`is_known`] of every object.
-static OUTSIDE: [RwLock<crate::address::AddressMap<()>>; OUTSIDE_SHARDS] =
-    [const { RwLock::new(HashMap::with_hasher(std::hash::BuildHasherDefault::new())) };
-        OUTSIDE_SHARDS];
-const OUTSIDE_SHARDS: usize = 64;
+/// adopted where an image put them. Lock-free to read, because retain and
+/// release ask [`is_known`] of every object.
+static OUTSIDE: crate::address::LockFreeAddressSet = crate::address::LockFreeAddressSet::new();
 /// The half-open bounds of `OUTSIDE`'s keys, so an ordinary object - almost
 /// every pointer asked about - is answered without hashing.
 static OUTSIDE_LO: AtomicUsize = AtomicUsize::new(usize::MAX);
 static OUTSIDE_HI: AtomicUsize = AtomicUsize::new(0);
 
-fn outside(p: usize) -> &'static RwLock<crate::address::AddressMap<()>> {
-    &OUTSIDE[(crate::address::mix(p as u64) >> 58) as usize % OUTSIDE_SHARDS]
-}
-
 fn note_outside(class: &'static Class) {
     let p = std::ptr::from_ref(class) as usize;
-    outside(p)
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(p, ());
+    OUTSIDE.insert(p);
     OUTSIDE_LO.fetch_min(p, Ordering::AcqRel);
     OUTSIDE_HI.fetch_max(p + 1, Ordering::AcqRel);
 }
 
 fn forget_outside(class: &'static Class) {
-    let p = std::ptr::from_ref(class) as usize;
-    outside(p)
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&p);
+    OUTSIDE.remove(std::ptr::from_ref(class) as usize);
 }
 
 /// Whether `p` is a class this runtime built.
@@ -265,10 +251,7 @@ pub fn is_known(p: *const Class) -> bool {
     }
     let p = p as usize;
     (OUTSIDE_LO.load(Ordering::Acquire)..OUTSIDE_HI.load(Ordering::Acquire)).contains(&p)
-        && outside(p)
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains_key(&p)
+        && OUTSIDE.contains(p)
 }
 
 fn arena_slot() -> Option<*mut Built> {
@@ -1250,7 +1233,7 @@ pub fn os_object_class() -> &'static Class {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Apple's `objc_class`: `isa`, `superclass`, `cache` (two words), `bits`.
@@ -1283,7 +1266,7 @@ mod tests {
     /// What a compiler leaves in a class's cache words: `_objc_empty_cache`.
     const EMPTY_CACHE: usize = 0x1000;
     /// A `class_ro_t` address, as `bits` holds it before realization.
-    const COMPILED_RO: usize = 0x2000;
+    pub(crate) const COMPILED_RO: usize = 0x2000;
 
     /// A compiled `objc_class` header, as an image holds one.
     fn compiled_header(bits: usize) -> *mut Class {
@@ -1295,7 +1278,10 @@ mod tests {
         }))
     }
 
-    fn adopt_under_nsobject(name: &CStr, bits: usize) -> (*mut Class, *mut Class, &'static Class) {
+    pub(crate) fn adopt_under_nsobject(
+        name: &CStr,
+        bits: usize,
+    ) -> (*mut Class, *mut Class, &'static Class) {
         crate::bootstrap();
         let nsobject = lookup(c"NSObject").expect("NSObject");
         let (header, meta) = (compiled_header(bits), compiled_header(COMPILED_RO));
