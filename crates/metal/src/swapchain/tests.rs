@@ -2429,6 +2429,64 @@ fn retained_backing_source_uses_direct_wsi_and_releases_after_gpu_copy() {
     sdl3::video::destroy_window(window);
 }
 
+/// A drawable queued while the compositor waits for a WSI image replaces
+/// the one the composite was prepared with, which goes back to the guest
+/// unshown: the image that comes back carries the newest frame.
+#[test]
+#[cfg(not(target_os = "macos"))]
+fn a_drawable_queued_during_the_wsi_wait_is_the_one_presented() {
+    if isolate_vulkan_graphical_test("a_drawable_queued_during_the_wsi_wait_is_the_one_presented") {
+        return;
+    }
+    let expected_mode = match std::env::var("ROSEMARY_METAL_PRESENTATION_MODE").as_deref() {
+        Ok("immediate") => vk::PresentModeKHR::IMMEDIATE,
+        Ok("mailbox") => vk::PresentModeKHR::MAILBOX,
+        _ => return,
+    };
+    let Some((window, gpu, mut state, older, frame)) = v10_fifo_fixture() else {
+        return;
+    };
+    assert_eq!(state.present_mode, expected_mode);
+    let newer = test_render_target(gpu, 160, 120).expect("a second Metal content source");
+    state.layers.push(8);
+    state.queue_direct(
+        8,
+        &frame,
+        PresentSource::from(&older),
+        &mut SourceOwner(None),
+        None,
+    );
+    let prepared = state
+        .prepare_composite(window)
+        .expect("prepared direct frame");
+    assert_eq!(prepared.source.image, older.image);
+    // What present_impl does for a superseding drawable while the worker,
+    // holding the presenting lock, waits in vkAcquireNextImageKHR.
+    state.queue_direct(
+        8,
+        &frame,
+        PresentSource::from(&newer),
+        &mut SourceOwner(None),
+        None,
+    );
+    let prepared = prepared.with_latest_direct(&state);
+    assert_eq!(prepared.source.image, newer.image);
+    let acquired = acquire_image(gpu, prepared.request, false);
+    assert_eq!(state.complete_composite(prepared, acquired), Ok(None));
+    assert!(!state.composite_dirty, "the newest frame reached WSI");
+    assert!(
+        state.direct.as_ref().is_some_and(|direct| {
+            direct.source.image == newer.image && direct.submitted_slot.is_some()
+        }),
+        "the newest drawable is the one on screen"
+    );
+    state.idle();
+    drop(state);
+    gpu.destroy_image(older);
+    gpu.destroy_image(newer);
+    sdl3::video::destroy_window(window);
+}
+
 /// Idle direct frames are snapshotted only after they are on screen, then
 /// their drawable can be returned without queuing another WSI presentation.
 #[test]

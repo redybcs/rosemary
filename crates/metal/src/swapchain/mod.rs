@@ -303,6 +303,10 @@ struct Swapchain {
     composite_dirty: bool,
     composite_shape: Option<corners::Shape>,
     composite_dirty_since: Option<Instant>,
+    /// The compositor prepared a direct frame and is waiting, without the
+    /// presenting lock, for WSI to hand back an image to copy it into. Until
+    /// then a newer drawable may replace the queued one under this lock alone.
+    awaiting_image: bool,
     compositor_batch_delay: Duration,
     last_wsi_error: Option<vk::Result>,
     /// A maintenance1 present fence did not signal even after reacquiring
@@ -403,8 +407,12 @@ struct PresentingGuard<'a> {
 
 impl Drop for PresentingGuard<'_> {
     fn drop(&mut self) {
-        drop(self.held.take());
-        self.gpu.presenter.notify_progress();
+        // A present that never held the lock made no progress to announce,
+        // and a deferred one retried on its own announcement would spin.
+        if let Some(held) = self.held.take() {
+            drop(held);
+            self.gpu.presenter.notify_progress();
+        }
     }
 }
 
@@ -477,6 +485,20 @@ struct PreparedComposite {
     prepared: PreparedPresent,
     request: AcquireRequest,
     direct: bool,
+}
+
+impl PreparedComposite {
+    /// This composite with the direct drawable queued now, which may have
+    /// superseded the one queued when it was prepared (see `awaiting_image`).
+    fn with_latest_direct(mut self, swapchain: &Swapchain) -> Self {
+        if self.direct
+            && let Some(latest) = swapchain.direct.as_ref()
+        {
+            self.frame = latest.frame.frame();
+            self.source = latest.source;
+        }
+        self
+    }
 }
 
 /// A directly presented drawable stays available for a later layer to join.
@@ -1527,13 +1549,20 @@ fn present_impl(
     // Presentations must reserve frame slots in order, but waiting for an
     // image must not hold the state lock: nextDrawable uses that time to
     // retire completed drawables and release their ring slots.
-    let presenting = match window_swapchain.presenting.try_lock() {
-        Ok(guard) => guard,
-        Err(TryLockError::WouldBlock) => return Ok(None),
-        Err(TryLockError::Poisoned(error)) => error.into_inner(),
+    //
+    // The compositor holds this lock while it waits for a WSI image. A
+    // drawable superseding the queued direct one needs no frame slot, so in
+    // that wait it goes ahead under the state lock alone (see below):
+    // deferred instead, every drawable the guest has would wait out the
+    // display, and MAILBOX would run no faster than FIFO.
+    let held = match window_swapchain.presenting.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::WouldBlock) => None,
+        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
     };
+    let locked = held.is_some();
     let presenting = PresentingGuard {
-        held: Some(presenting),
+        held,
         gpu: window_swapchain.gpu,
     };
     // The SDL window can be torn down after we cloned the entry, before
@@ -1645,6 +1674,15 @@ fn present_impl(
         return Ok(Some(true));
     }
     let joined = !swapchain.layers.contains(&layer);
+    let superseding = swapchain.awaiting_image
+        && !joined
+        && swapchain
+            .direct
+            .as_ref()
+            .is_some_and(|direct| direct.layer == layer);
+    if !locked && !superseding {
+        return Ok(None);
+    }
     if joined {
         swapchain.layers.push(layer);
     }
@@ -1698,6 +1736,11 @@ fn present_impl(
             regions.as_deref(),
             owner.0.is_some() || backing.is_some(),
         );
+        if !locked && !direct {
+            // Staging needs a frame slot, and the waiting compositor has one
+            // reserved: this drawable waits for the lock like any other.
+            return Ok(None);
+        }
         let converting = !direct && swapchain.direct.is_some();
         let converted = if converting {
             swapchain.stage_direct_snapshot(true)
@@ -4006,6 +4049,7 @@ fn layer_compositor_worker(window: usize, entry: Arc<WindowSwapchain>) {
         let prepared = state.prepare_composite(window as sdl3::Window);
         let typed_device_loss = state.last_wsi_error.take() == Some(vk::Result::ERROR_DEVICE_LOST);
         let gpu = state.gpu;
+        state.awaiting_image = prepared.as_ref().is_ok_and(|prepared| prepared.direct);
         drop(state);
         let prepared = match prepared {
             Ok(prepared) => prepared,
@@ -4067,6 +4111,13 @@ fn layer_compositor_worker(window: usize, entry: Arc<WindowSwapchain>) {
                 }
                 acquired
             }
+        };
+        // From here the direct drawable to copy is settled: the newest one
+        // queued while the worker waited, if one was.
+        let prepared = {
+            let mut state = entry.state.lock().expect("window swapchain");
+            state.awaiting_image = false;
+            prepared.with_latest_direct(&state)
         };
         if matches!(acquired, CompositorAcquire::TimedOut) {
             // Retain the dirty accumulator. Only this window waits; another
@@ -4898,6 +4949,7 @@ impl Swapchain {
             composite_dirty: false,
             composite_shape: None,
             composite_dirty_since: None,
+            awaiting_image: false,
             compositor_batch_delay: Duration::from_millis(4),
             last_wsi_error: None,
             stalled_present_fence: false,
