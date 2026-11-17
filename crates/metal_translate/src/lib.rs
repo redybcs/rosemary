@@ -270,6 +270,14 @@ impl TranslateError {
             diagnostics: vec![diagnostic],
         }
     }
+
+    /// Success, unless something was diagnosed.
+    pub(crate) fn unless_empty(diagnostics: Vec<Diagnostic>) -> Result<(), Self> {
+        match diagnostics.is_empty() {
+            true => Ok(()),
+            false => Err(Self { diagnostics }),
+        }
+    }
 }
 
 impl fmt::Display for TranslateError {

@@ -61,7 +61,8 @@ pub fn parse_msl_partial(
         let tokens = lex::lex(&text, 1)?;
         let program = parse::parse(&tokens)?;
         let (module, rejected) = lower::lower(&program)?;
-        module.verify()?;
+        // Each entry point was verified as it was lowered.
+        module.verify_assembly()?;
         Ok((module, rejected))
     })();
     match compiled {

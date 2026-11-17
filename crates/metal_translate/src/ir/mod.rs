@@ -916,6 +916,25 @@ pub enum Terminator {
 
 impl Module {
     pub fn verify(&self) -> Result<(), TranslateError> {
+        let mut diagnostics = self.entry_point_diagnostics();
+        for function in self.functions.iter().chain(&self.static_initializers) {
+            verify_function(function, &mut diagnostics);
+        }
+        TranslateError::unless_empty(diagnostics)
+    }
+
+    /// [`Module::verify`] for a module each of whose functions was verified on
+    /// its own as it was made, as the source frontend's entry points are: the
+    /// entry points and the static initializers, which were not.
+    pub(crate) fn verify_assembly(&self) -> Result<(), TranslateError> {
+        let mut diagnostics = self.entry_point_diagnostics();
+        for function in &self.static_initializers {
+            verify_function(function, &mut diagnostics);
+        }
+        TranslateError::unless_empty(diagnostics)
+    }
+
+    fn entry_point_diagnostics(&self) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for entry in &self.entries {
             if entry.early_fragment_tests {
@@ -965,14 +984,7 @@ impl Module {
                 }
             }
         }
-        for function in self.functions.iter().chain(&self.static_initializers) {
-            verify_function(function, &mut diagnostics);
-        }
-        if diagnostics.is_empty() {
-            Ok(())
-        } else {
-            Err(TranslateError { diagnostics })
-        }
+        diagnostics
     }
 }
 
@@ -982,10 +994,6 @@ impl Function {
     pub(crate) fn verify(&self) -> Result<(), TranslateError> {
         let mut diagnostics = Vec::new();
         verify_function(self, &mut diagnostics);
-        if diagnostics.is_empty() {
-            Ok(())
-        } else {
-            Err(TranslateError { diagnostics })
-        }
+        TranslateError::unless_empty(diagnostics)
     }
 }
