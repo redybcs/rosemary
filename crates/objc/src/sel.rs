@@ -1,27 +1,37 @@
 use std::collections::HashSet;
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, c_char};
+use std::hash::BuildHasherDefault;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::{LazyLock, RwLock};
 
 pub type Sel = *const c_char;
 
-/// Every name registered so far, leaked so the pointers stay valid forever.
-static TABLE: LazyLock<RwLock<HashSet<&'static CStr>>> =
-    LazyLock::new(|| RwLock::new(HashSet::new()));
+/// Every name registered so far, by its bytes, leaked with a NUL after them so
+/// that a name's address is its selector forever. Keyed by the bytes so that a
+/// lookup needs no NUL-terminated copy of a Rust name, and hashed as the
+/// address maps are: the names are the program's own.
+static TABLE: RwLock<HashSet<&'static [u8], BuildHasherDefault<crate::address::AddressHasher>>> =
+    RwLock::new(HashSet::with_hasher(BuildHasherDefault::new()));
 
 /// The selector for `name`, registering it if this is the first sighting.
 pub fn register(name: &CStr) -> Sel {
-    if let Some(found) = TABLE.read().unwrap_or_else(|e| e.into_inner()).get(name) {
-        return found.as_ptr();
+    intern(name.to_bytes())
+}
+
+/// The selector named `bytes`, which hold no NUL.
+fn intern(bytes: &[u8]) -> Sel {
+    if let Some(found) = TABLE.read().unwrap_or_else(|e| e.into_inner()).get(bytes) {
+        return found.as_ptr().cast();
     }
     let mut table = TABLE.write().unwrap_or_else(|e| e.into_inner());
     // Re-checked under the write lock: two threads can miss the read.
-    if let Some(found) = table.get(name) {
-        return found.as_ptr();
+    if let Some(found) = table.get(bytes) {
+        return found.as_ptr().cast();
     }
-    let leaked: &'static CStr = Box::leak(CString::from(name).into_boxed_c_str());
-    table.insert(leaked);
-    leaked.as_ptr()
+    let terminated: &'static [u8] = Box::leak([bytes, &[0]].concat().into_boxed_slice());
+    let name = &terminated[..bytes.len()];
+    table.insert(name);
+    name.as_ptr().cast()
 }
 
 const RECENT_SLOTS: usize = 256;
@@ -49,8 +59,11 @@ pub fn get(name: &str) -> Sel {
     {
         return sel;
     }
-    let c = CString::new(name).expect("a selector name has no interior NUL");
-    let sel = register(&c);
+    assert!(
+        !name.as_bytes().contains(&0),
+        "a selector name has no interior NUL"
+    );
+    let sel = intern(name.as_bytes());
     RECENT.with(|recent| recent[slot].set((address, name.len(), sel)));
     sel
 }
@@ -58,8 +71,7 @@ pub fn get(name: &str) -> Sel {
 /// [`register`] for [`sel!`], which remembers the answer in `cache`.
 #[doc(hidden)]
 pub fn register_cached(cache: &AtomicPtr<c_char>, name: &'static str) -> Sel {
-    let name = CStr::from_bytes_with_nul(name.as_bytes()).expect("a NUL-terminated literal");
-    let sel = register(name);
+    let sel = get(name);
     cache.store(sel.cast_mut(), Ordering::Release);
     sel
 }
@@ -74,7 +86,7 @@ macro_rules! sel {
             ::std::sync::atomic::AtomicPtr::new(::std::ptr::null_mut());
         let sel = CACHE.load(::std::sync::atomic::Ordering::Acquire);
         if sel.is_null() {
-            $crate::sel::register_cached(&CACHE, ::core::concat!($name, "\0"))
+            $crate::sel::register_cached(&CACHE, $name)
         } else {
             sel.cast_const()
         }
@@ -94,7 +106,7 @@ pub(crate) fn validate(sel: Sel) {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .any(|known| known.as_ptr() == sel)
+            .any(|known| known.as_ptr().cast() == sel)
     {
         crate::fail!("objc debug: invalid selector handle {sel:p}");
     }
@@ -132,6 +144,18 @@ mod tests {
         let sel = crate::sel!("cacheProbeLiteral");
         assert_eq!(sel, get("cacheProbeLiteral"));
         assert_eq!(sel, crate::sel!("cacheProbeLiteral"));
+    }
+
+    #[test]
+    fn a_name_registered_from_c_and_from_rust_is_one_selector() {
+        let from_c = register(c"cacheProbeBothWays:");
+        assert_eq!(get("cacheProbeBothWays:"), from_c);
+        // SAFETY: a selector is a NUL-terminated interned name.
+        assert_eq!(unsafe { CStr::from_ptr(from_c) }, c"cacheProbeBothWays:");
+        let empty = get("");
+        assert_eq!(empty, register(c""));
+        // SAFETY: as above.
+        assert_eq!(unsafe { CStr::from_ptr(empty) }, c"");
     }
 
     #[test]
