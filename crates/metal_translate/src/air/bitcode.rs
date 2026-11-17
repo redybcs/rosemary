@@ -325,7 +325,7 @@ fn parse_packed_air(
             outputs,
         }],
     };
-    module.verify()?;
+    // Verified by `parse_air`, the one way here.
     Ok(module)
 }
 
