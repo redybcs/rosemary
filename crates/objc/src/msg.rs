@@ -216,9 +216,9 @@ unsafe fn resolve_dynamically(
     sel: Sel,
 ) -> Option<&'static crate::class::Method> {
     let (resolver, asked) = match class.is_meta() {
-        true => (crate::sel::get("resolveClassMethod:"), receiver),
+        true => (crate::sel!("resolveClassMethod:"), receiver),
         false => (
-            crate::sel::get("resolveInstanceMethod:"),
+            crate::sel!("resolveInstanceMethod:"),
             crate::class::ptr(class) as Id,
         ),
     };
@@ -251,7 +251,7 @@ unsafe fn resolve_dynamically(
 ///
 /// As [`resolve_dynamically`].
 unsafe fn forwarding_target(class: &'static crate::class::Class, receiver: Id, sel: Sel) -> Id {
-    let forward = crate::sel::get("forwardingTargetForSelector:");
+    let forward = crate::sel!("forwardingTargetForSelector:");
     let Some(method) = class.method(forward) else {
         return std::ptr::null_mut();
     };
@@ -1114,7 +1114,7 @@ mod tests {
 
     #[test]
     fn a_cached_send_follows_a_replaced_implementation() {
-        let sel = crate::sel::get("rosemaryCachedAnswer");
+        let sel = crate::sel!("rosemaryCachedAnswer");
         let class = class_answering(c"RosemaryCachedSendReplaced", sel, answer_one);
         let instance = crate::object::create_instance(class, 0);
         assert_eq!(send_answer(instance, sel), 1);
@@ -1131,7 +1131,7 @@ mod tests {
 
     #[test]
     fn classes_sharing_a_selector_each_reach_their_own_method() {
-        let sel = crate::sel::get("rosemaryCachedShared");
+        let sel = crate::sel!("rosemaryCachedShared");
         let first = crate::object::create_instance(
             class_answering(c"RosemaryCachedSharedOne", sel, answer_one),
             0,
@@ -1154,7 +1154,7 @@ mod tests {
 
     #[test]
     fn a_forwarded_send_is_not_cached_for_the_forwarder() {
-        let sel = crate::sel::get("rosemaryCachedForwarded");
+        let sel = crate::sel!("rosemaryCachedForwarded");
         let target = crate::object::create_instance(
             class_answering(c"RosemaryCachedForwardTarget", sel, answer_two),
             0,
@@ -1165,7 +1165,7 @@ mod tests {
             crate::class::allocate_pair(Some(nsobject), c"RosemaryCachedForwarder", 0)
                 .expect("an unused name");
         assert!(forwarder_class.add_method(
-            crate::sel::get("forwardingTargetForSelector:"),
+            crate::sel!("forwardingTargetForSelector:"),
             forward_to_target as crate::class::Imp,
             c"@24@0:8:16",
         ));
@@ -1178,7 +1178,7 @@ mod tests {
 
     #[test]
     fn sends_racing_replaced_implementations_reach_one_of_them() {
-        let sel = crate::sel::get("rosemaryCachedRace");
+        let sel = crate::sel!("rosemaryCachedRace");
         let class = class_answering(c"RosemaryCachedRace", sel, answer_one);
         let instance = crate::object::create_instance(class, 0) as usize;
         let sel_address = sel as usize;
@@ -1216,7 +1216,7 @@ mod tests {
     #[ignore = "a benchmark, not a check"]
     fn send_cost() {
         const SENDS: u64 = 20_000_000;
-        let sel = crate::sel::get("rosemaryBenchmarkAnswer");
+        let sel = crate::sel!("rosemaryBenchmarkAnswer");
         let instance = crate::object::create_instance(
             class_answering(c"RosemaryBenchmarkSend", sel, answer_one),
             0,
@@ -1238,7 +1238,7 @@ mod tests {
     fn unrecognised_names_a_class_receiver_as_a_class() {
         crate::bootstrap();
         let nsobject = crate::class::lookup(c"NSObject").expect("NSObject");
-        let sel = crate::sel::get("noSuchMessage");
+        let sel = crate::sel!("noSuchMessage");
         let instance = crate::object::create_instance(nsobject, 0);
         let class = crate::class::ptr(nsobject) as Id;
         // SAFETY: a live instance and a registered class.

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_char};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{LazyLock, RwLock};
 
 pub type Sel = *const c_char;
@@ -37,11 +38,14 @@ pub fn get(name: &str) -> Sel {
     let address = name.as_ptr() as usize;
     let slot = (crate::address::mix((address ^ name.len()) as u64) >> 56) as usize % RECENT_SLOTS;
     let (at, length, sel) = RECENT.with(|recent| recent[slot].get());
-    // SAFETY: a non-null cached selector is an interned, NUL-terminated name.
+    // The bytes are compared because the buffer at `address` may have been
+    // reused for another name since.
+    // SAFETY: a non-null cached selector was interned from a name of exactly
+    // `length` bytes, so that many are readable before its NUL.
     if at == address
         && length == name.len()
         && !sel.is_null()
-        && unsafe { CStr::from_ptr(sel) }.to_bytes() == name.as_bytes()
+        && unsafe { std::slice::from_raw_parts(sel.cast::<u8>(), length) } == name.as_bytes()
     {
         return sel;
     }
@@ -49,6 +53,32 @@ pub fn get(name: &str) -> Sel {
     let sel = register(&c);
     RECENT.with(|recent| recent[slot].set((address, name.len(), sel)));
     sel
+}
+
+/// [`register`] for [`sel!`], which remembers the answer in `cache`.
+#[doc(hidden)]
+pub fn register_cached(cache: &AtomicPtr<c_char>, name: &'static str) -> Sel {
+    let name = CStr::from_bytes_with_nul(name.as_bytes()).expect("a NUL-terminated literal");
+    let sel = register(name);
+    cache.store(sel.cast_mut(), Ordering::Release);
+    sel
+}
+
+/// The selector for a string literal, registered on the first send from each
+/// call site and loaded from a static after that: the constant selectors on
+/// hot paths need neither a hash nor a comparison of their name.
+#[macro_export]
+macro_rules! sel {
+    ($name:literal) => {{
+        static CACHE: ::std::sync::atomic::AtomicPtr<::std::ffi::c_char> =
+            ::std::sync::atomic::AtomicPtr::new(::std::ptr::null_mut());
+        let sel = CACHE.load(::std::sync::atomic::Ordering::Acquire);
+        if sel.is_null() {
+            $crate::sel::register_cached(&CACHE, ::core::concat!($name, "\0"))
+        } else {
+            sel.cast_const()
+        }
+    }};
 }
 
 /// A selector's name, which is the selector.
@@ -95,6 +125,13 @@ mod tests {
         assert_ne!(alpha, bravo);
         assert_eq!(bravo, register(c"cacheProbeBravo"));
         assert_eq!(alpha, register(c"cacheProbeAlpha"));
+    }
+
+    #[test]
+    fn a_literal_selector_is_the_registered_one() {
+        let sel = crate::sel!("cacheProbeLiteral");
+        assert_eq!(sel, get("cacheProbeLiteral"));
+        assert_eq!(sel, crate::sel!("cacheProbeLiteral"));
     }
 
     #[test]

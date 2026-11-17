@@ -1645,14 +1645,14 @@ mod tests {
         let root = crate::class::lookup(c"NSObject").unwrap();
         let answering = crate::class::allocate_pair(Some(root), c"ForwardTestTarget", 0).unwrap();
         answering.add_method(
-            crate::sel::get("forwardTestAnswer"),
+            crate::sel!("forwardTestAnswer"),
             answer as crate::class::Imp,
             c"Q16@0:8",
         );
         crate::class::register_pair(answering);
         let proxy = crate::class::allocate_pair(Some(root), c"ForwardTestProxy", 0).unwrap();
         proxy.add_method(
-            crate::sel::get("forwardingTargetForSelector:"),
+            crate::sel!("forwardingTargetForSelector:"),
             target_for as crate::class::Imp,
             c"@24@0:8:16",
         );
@@ -1664,7 +1664,7 @@ mod tests {
         let got = unsafe {
             let f: unsafe extern "C" fn(Id, crate::sel::Sel) -> usize =
                 std::mem::transmute(crate::msg::entry());
-            f(sender, crate::sel::get("forwardTestAnswer"))
+            f(sender, crate::sel!("forwardTestAnswer"))
         };
         assert_eq!(got, 42);
         crate::arc::release(sender);
@@ -1703,7 +1703,7 @@ mod introspection {
         let class = class_named(c"RosemaryCopyLists");
         assert!(class.add_ivar(c"first", 8, 3, c"@"));
         assert!(class.add_ivar(c"second", 4, 2, c"i"));
-        let sel = crate::sel::get("tick:");
+        let sel = crate::sel!("tick:");
         assert!(class.add_method(sel, nothing as *const c_void, c"v24@0:8@16"));
         crate::class::register_pair(class);
         let cls = crate::class::ptr(class) as *const c_void;
@@ -1726,7 +1726,7 @@ mod introspection {
     #[test]
     fn reads_argument_types_out_of_a_method_encoding() {
         let class = class_named(c"RosemaryMethodTypes");
-        let sel = crate::sel::get("tick:");
+        let sel = crate::sel!("tick:");
         assert!(class.add_method(sel, nothing as *const c_void, c"v24@0:8^{CGPoint=dd}16"));
         let method = class.own_method(sel).unwrap() as *const Method as *const c_void;
         unsafe {

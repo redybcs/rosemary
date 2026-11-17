@@ -152,7 +152,7 @@ pub(crate) fn forget_count(object: Id) {
 fn deallocate(object: Id) {
     crate::debug::begin_deallocation(object);
     clear_weak_references(object);
-    let dealloc = crate::sel::get("dealloc");
+    let dealloc = crate::sel!("dealloc");
     // SAFETY: `object` is an object this runtime allocated.
     if let Some(class) = unsafe { crate::object::class_of(object) }
         && let Some(method) = class.method(dealloc)
@@ -488,7 +488,7 @@ pub fn set_associated_with_policy(object: Id, key: *const c_void, value: Id, pol
             let copy = unsafe {
                 let f: unsafe extern "C" fn(Id, crate::sel::Sel) -> Id =
                     std::mem::transmute(crate::msg::entry());
-                f(value, crate::sel::get("copy"))
+                f(value, crate::sel!("copy"))
             };
             (copy, true)
         }
@@ -583,7 +583,7 @@ mod lifetime_tests {
         let class = crate::class::allocate_pair(Some(nsobject), c"RosemaryCountedDealloc", 0)
             .expect("an unused name");
         assert!(class.add_method(
-            crate::sel::get("dealloc"),
+            crate::sel!("dealloc"),
             counting_dealloc as crate::class::Imp,
             c"v16@0:8",
         ));
