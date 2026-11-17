@@ -280,7 +280,7 @@ unsafe extern "C" fn alloc(receiver: Id, _sel: Sel) -> Id {
     unsafe {
         send1(
             receiver,
-            crate::sel::get("allocWithZone:"),
+            crate::sel!("allocWithZone:"),
             std::ptr::null_mut(),
         )
     }
@@ -294,12 +294,12 @@ unsafe extern "C" fn alloc_with_zone(receiver: Id, _sel: Sel, _zone: *mut c_void
 /// `+new` is `[[self alloc] init]`, both of them resolved.
 unsafe extern "C" fn new(receiver: Id, _sel: Sel) -> Id {
     // SAFETY: the receiver is a class.
-    let object = unsafe { send1(receiver, crate::sel::get("alloc"), std::ptr::null_mut()) };
+    let object = unsafe { send1(receiver, crate::sel!("alloc"), std::ptr::null_mut()) };
     if object.is_null() {
         return object;
     }
     // SAFETY: a freshly allocated object, and `-init` is `id (*)(id, SEL)`.
-    unsafe { send1(object, crate::sel::get("init"), std::ptr::null_mut()) }
+    unsafe { send1(object, crate::sel!("init"), std::ptr::null_mut()) }
 }
 
 unsafe extern "C" fn init(receiver: Id, _sel: Sel) -> Id {
@@ -362,14 +362,14 @@ unsafe extern "C" fn is_equal(receiver: Id, _sel: Sel, other: Id) -> bool {
 /// `-isEqualTo:`, of `NSComparisonMethods`: the receiver's own `-isEqual:`.
 unsafe extern "C" fn is_equal_to(receiver: Id, _sel: Sel, other: Id) -> bool {
     let Some(method) = (unsafe { crate::object::class_of(receiver) })
-        .and_then(|class| class.method(crate::sel::get("isEqual:")))
+        .and_then(|class| class.method(crate::sel!("isEqual:")))
     else {
         return false;
     };
     // SAFETY: `-isEqual:` is `BOOL (id, SEL, id)`.
     let f: unsafe extern "C" fn(Id, Sel, Id) -> bool =
         unsafe { std::mem::transmute(method.implementation()) };
-    unsafe { f(receiver, crate::sel::get("isEqual:"), other) }
+    unsafe { f(receiver, crate::sel!("isEqual:"), other) }
 }
 
 unsafe extern "C" fn hash(receiver: Id, _sel: Sel) -> usize {
@@ -403,7 +403,7 @@ unsafe extern "C" fn is_member_of(receiver: Id, _sel: Sel, class: Id) -> bool {
     // SAFETY: `Class (id, SEL)`.
     let mine = unsafe {
         let f: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(crate::msg::entry());
-        f(receiver, crate::sel::get("class"))
+        f(receiver, crate::sel!("class"))
     };
     !mine.is_null() && mine == class
 }
@@ -516,11 +516,7 @@ unsafe extern "C" fn copy(receiver: Id, _sel: Sel) -> Id {
     unsafe {
         let f: unsafe extern "C" fn(Id, Sel, *mut c_void) -> Id =
             std::mem::transmute(crate::msg::entry());
-        f(
-            receiver,
-            crate::sel::get("copyWithZone:"),
-            std::ptr::null_mut(),
-        )
+        f(receiver, crate::sel!("copyWithZone:"), std::ptr::null_mut())
     }
 }
 
@@ -532,7 +528,7 @@ unsafe extern "C" fn mutable_copy(receiver: Id, _sel: Sel) -> Id {
             std::mem::transmute(crate::msg::entry());
         f(
             receiver,
-            crate::sel::get("mutableCopyWithZone:"),
+            crate::sel!("mutableCopyWithZone:"),
             std::ptr::null_mut(),
         )
     }

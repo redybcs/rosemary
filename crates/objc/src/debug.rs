@@ -591,7 +591,7 @@ mod tests {
         let root = crate::class::lookup(c"NSObject").expect("NSObject");
         let class = crate::class::allocate_pair(Some(root), class_name, 0).expect("fresh class");
         if let Some(imp) = dealloc {
-            assert!(class.add_method(crate::sel::get("dealloc"), imp, c"v16@0:8"));
+            assert!(class.add_method(crate::sel!("dealloc"), imp, c"v16@0:8"));
         }
         crate::class::register_pair(class);
         crate::object::create_instance(class, 0)
@@ -686,12 +686,7 @@ mod tests {
                 let object = object(c"RosemaryDebugProperty", None);
                 // SAFETY: deliberately supplies an offset outside the object.
                 unsafe {
-                    crate::shorthand::objc_getProperty(
-                        object,
-                        crate::sel::get("value"),
-                        4096,
-                        false,
-                    );
+                    crate::shorthand::objc_getProperty(object, crate::sel!("value"), 4096, false);
                 }
             }
             "class" => {

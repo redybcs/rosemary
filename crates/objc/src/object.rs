@@ -80,7 +80,7 @@ pub unsafe fn destruct_instance(object: Id) {
     let Some(class) = (unsafe { class_of(object) }) else {
         return;
     };
-    let destruct = crate::sel::get(".cxx_destruct");
+    let destruct = crate::sel!(".cxx_destruct");
     // Apple's order: the ivars first, then the associations.
     let _associations = RemoveAssociations(object);
     // The chain-wide lookup is cached; a class none of whose ancestors has

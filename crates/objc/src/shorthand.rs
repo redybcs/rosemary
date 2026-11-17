@@ -64,26 +64,26 @@ fn expect_class(cls: Id, function: &str) {
 pub unsafe extern "C" fn objc_alloc(cls: Id) -> Id {
     expect_class(cls, "objc_alloc");
     // SAFETY: a class is an object.
-    unsafe { send0(cls, crate::sel::get("alloc")) }
+    unsafe { send0(cls, crate::sel!("alloc")) }
 }
 
 pub unsafe extern "C" fn objc_allocWithZone(cls: Id) -> Id {
     expect_class(cls, "objc_allocWithZone");
-    unsafe { send0(cls, crate::sel::get("allocWithZone:")) }
+    unsafe { send0(cls, crate::sel!("allocWithZone:")) }
 }
 
 pub unsafe extern "C" fn objc_alloc_init(cls: Id) -> Id {
     expect_class(cls, "objc_alloc_init");
     // SAFETY: checked a class above.
-    let object = unsafe { send0(cls, crate::sel::get("alloc")) };
+    let object = unsafe { send0(cls, crate::sel!("alloc")) };
     // SAFETY: a freshly allocated object.
-    unsafe { send0(object, crate::sel::get("init")) }
+    unsafe { send0(object, crate::sel!("init")) }
 }
 
 pub unsafe extern "C" fn objc_opt_new(cls: Id) -> Id {
     expect_class(cls, "objc_opt_new");
     // SAFETY: a class is an object.
-    unsafe { send0(cls, crate::sel::get("new")) }
+    unsafe { send0(cls, crate::sel!("new")) }
 }
 
 pub unsafe extern "C" fn objc_opt_self(object: Id) -> Id {
@@ -109,12 +109,12 @@ pub unsafe extern "C" fn objc_opt_class(object: Id) -> *mut c_void {
 
 pub unsafe extern "C" fn objc_opt_isKindOfClass(object: Id, cls: *const c_void) -> bool {
     // SAFETY: a live object, and a class pointer.
-    unsafe { send1_bool(object, crate::sel::get("isKindOfClass:"), cls as usize) }
+    unsafe { send1_bool(object, crate::sel!("isKindOfClass:"), cls as usize) }
 }
 
 pub unsafe extern "C" fn objc_opt_respondsToSelector(object: Id, sel: Sel) -> bool {
     // SAFETY: a live object, and a selector.
-    unsafe { send1_bool(object, crate::sel::get("respondsToSelector:"), sel as usize) }
+    unsafe { send1_bool(object, crate::sel!("respondsToSelector:"), sel as usize) }
 }
 
 /// `@property` accessors the compiler folds, for a property whose ivar it names
@@ -220,7 +220,7 @@ unsafe fn store_property(receiver: Id, offset: isize, value: Id) {
 /// `-copy`, or the object itself where the class does not implement it.
 fn copy_of(value: Id) -> Id {
     // SAFETY: a live object or null.
-    let copied = unsafe { send0(value, crate::sel::get("copy")) };
+    let copied = unsafe { send0(value, crate::sel!("copy")) };
     match copied.is_null() {
         true => value,
         false => copied,

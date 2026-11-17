@@ -893,7 +893,7 @@ fn initialize(class: &'static Class) {
             }
         }
     }
-    let sel = crate::sel::get("initialize");
+    let sel = crate::sel!("initialize");
     if let Some(method) = class.metaclass().method(sel) {
         // SAFETY: `+initialize` is `void (Class, SEL)`.
         unsafe {
@@ -1308,7 +1308,7 @@ mod tests {
     #[test]
     fn an_adopted_class_is_its_compiled_header() {
         let (header, meta, class) = adopt_under_nsobject(c"RosemaryAdoptedClass", COMPILED_RO);
-        let sel = crate::sel::get("rosemaryAdoptedAnswer");
+        let sel = crate::sel!("rosemaryAdoptedAnswer");
         assert!(class.add_method(sel, std::ptr::dangling(), c"Q16@0:8"));
         register_pair(class);
 
