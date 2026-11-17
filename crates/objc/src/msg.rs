@@ -134,6 +134,40 @@ mod sends {
         else {
             return;
         };
+        fill(isa, class, sel, imp, generation);
+    }
+
+    /// Cache what a super send found searching from `class`, under the same
+    /// conditions: the entry is the one a direct send to an instance of
+    /// `class` would make, so the two kinds of send share it.
+    pub(super) fn remember_class(
+        class: &'static crate::class::Class,
+        sel: Sel,
+        imp: *const c_void,
+        generation: usize,
+    ) {
+        if !cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) || crate::debug::enabled() {
+            return;
+        }
+        fill(
+            crate::class::ptr(class) as usize,
+            class,
+            sel,
+            imp,
+            generation,
+        );
+    }
+
+    /// Write the entry for `key`, the probes' word for `class`.
+    fn fill(
+        key: usize,
+        class: &'static crate::class::Class,
+        sel: Sel,
+        imp: *const c_void,
+        generation: usize,
+    ) {
+        // A probe skips `+initialize`, so it must not find a class before
+        // that has run.
         if !crate::class::is_initialized(class) {
             return;
         }
@@ -147,10 +181,10 @@ mod sends {
             return;
         }
         *filled = true;
-        let entry = &TABLE[index(isa, sel as usize)];
+        let entry = &TABLE[index(key, sel as usize)];
         let sequence = entry.sequence.load(Ordering::Relaxed);
         entry.sequence.store(sequence + 1, Ordering::Release);
-        entry.class.store(isa, Ordering::Release);
+        entry.class.store(key, Ordering::Release);
         entry.sel.store(sel as usize, Ordering::Release);
         entry.imp.store(imp as usize, Ordering::Release);
         entry.sequence.store(sequence + 2, Ordering::Release);
@@ -174,6 +208,88 @@ mod sends {
 /// Drop every cached send, for a method table which changed.
 pub(crate) fn forget_cached_sends() {
     sends::forget();
+}
+
+/// The x86-64 probe of [`sends::TABLE`], for the class in rax and the selector
+/// in `$sel`, entered with rax saved on the stack because a variadic call's
+/// vector count is in it. A hit restores rax, runs `$enter` and jumps to the
+/// cached `IMP`; a miss, or a class of zero (which is also what a forgotten
+/// entry holds), branches to `8:` with rax still saved. Uses r10 and r11.
+#[cfg(target_arch = "x86_64")]
+macro_rules! x86_64_probe {
+    ($sel:literal, $enter:literal) => {
+        concat!(
+            "test    rax, rax\n",
+            "jz      8f\n",
+            "mov     r11, rax\n",
+            "shl     r11, 7\n",
+            "xor     r11, ",
+            $sel,
+            "\n",
+            // The multiplier is 64 bits wide, too wide for imul's immediate.
+            "mov     r10, {multiplier}\n",
+            "imul    r11, r10\n",
+            "shr     r11, {shift}\n",
+            "shl     r11, 5\n",
+            "lea     r10, [rip + {table}]\n",
+            "add     r10, r11\n",
+            "mov     r11, [r10]\n",
+            "test    r11, 1\n",
+            "jnz     8f\n",
+            "cmp     rax, [r10 + 8]\n",
+            "jne     8f\n",
+            "cmp     ",
+            $sel,
+            ", [r10 + 16]\n",
+            "jne     8f\n",
+            "mov     rax, [r10 + 24]\n",
+            "cmp     r11, [r10]\n",
+            "jne     8f\n",
+            "mov     r11, rax\n",
+            "pop     rax\n",
+            $enter,
+            "\n",
+            "jmp     r11",
+        )
+    };
+}
+
+/// The AArch64 probe of [`sends::TABLE`], for the class in x9 and the selector
+/// in x1. A hit runs `$enter` and jumps to the cached `IMP`; a miss, or a class
+/// of zero, branches to `8:`. Uses only x9-x17, which a call may clobber.
+///
+/// Unlike x86-64, loads may be reordered: the sequence is read with acquire,
+/// and the entry's loads are fenced before it is read again.
+#[cfg(target_arch = "aarch64")]
+macro_rules! aarch64_probe {
+    ($enter:literal) => {
+        concat!(
+            "cbz     x9, 8f\n",
+            "eor     x10, x1, x9, lsl #7\n",
+            "movz    x11, #{m0}\n",
+            "movk    x11, #{m1}, lsl #16\n",
+            "movk    x11, #{m2}, lsl #32\n",
+            "movk    x11, #{m3}, lsl #48\n",
+            "mul     x10, x10, x11\n",
+            "lsr     x10, x10, #{shift}\n",
+            "adrp    x11, {table}\n",
+            "add     x11, x11, :lo12:{table}\n",
+            "add     x11, x11, x10, lsl #5\n",
+            "ldar    x12, [x11]\n",
+            "tbnz    x12, #0, 8f\n",
+            "ldp     x13, x14, [x11, #8]\n",
+            "ldr     x17, [x11, #24]\n",
+            "dmb     ishld\n",
+            "ldr     x15, [x11]\n",
+            "cmp     x13, x9\n",
+            "ccmp    x14, x1, #0, eq\n",
+            "ccmp    x15, x12, #0, eq\n",
+            "b.ne    8f\n",
+            $enter,
+            "\n",
+            "br      x17",
+        )
+    };
 }
 
 /// The method `sel` resolves to for `receiver`, after the class has had its
@@ -374,8 +490,15 @@ unsafe extern "C" fn lookup_stret(receiver: Id, sel: Sel, slot: *mut Id) -> *con
         true => unrecognised_stret_logged as *const c_void,
         false => unrecognised_stret as *const c_void,
     };
+    let generation = crate::class::generation();
     // SAFETY: the caller's obligations.
-    unsafe { resolve(receiver, sel, slot) }.unwrap_or(refused)
+    let resolved = unsafe { resolve(receiver, sel, slot) };
+    if let Some(imp) = resolved {
+        // SAFETY: as above. An `IMP` is the same whichever entry point sent to
+        // it, so the probes of both share the table.
+        unsafe { sends::remember(receiver, sel, slot, imp, generation) };
+    }
+    resolved.unwrap_or(refused)
 }
 
 /// `objc_msgSend`'s address.
@@ -422,31 +545,7 @@ unsafe extern "C" fn msg_send() {
     core::arch::naked_asm!(
         "cbz     x0, 9f",
         "ldr     x9, [x0]",
-        // A forgotten or empty entry's class is zero.
-        "cbz     x9, 8f",
-        "eor     x10, x1, x9, lsl #7",
-        "movz    x11, #{m0}",
-        "movk    x11, #{m1}, lsl #16",
-        "movk    x11, #{m2}, lsl #32",
-        "movk    x11, #{m3}, lsl #48",
-        "mul     x10, x10, x11",
-        "lsr     x10, x10, #{shift}",
-        "adrp    x11, {table}",
-        "add     x11, x11, :lo12:{table}",
-        "add     x11, x11, x10, lsl #5",
-        // Unlike x86-64, loads may be reordered: the sequence is read with
-        // acquire, and the entry's loads are fenced before it is read again.
-        "ldar    x12, [x11]",
-        "tbnz    x12, #0, 8f",
-        "ldp     x13, x14, [x11, #8]",
-        "ldr     x17, [x11, #24]",
-        "dmb     ishld",
-        "ldr     x15, [x11]",
-        "cmp     x13, x9",
-        "ccmp    x14, x1, #0, eq",
-        "ccmp    x15, x12, #0, eq",
-        "b.ne    8f",
-        "br      x17",
+        aarch64_probe!(""),
         "8:",
         "stp     x29, x30, [sp, #-16]!",
         "mov     x29, sp",
@@ -503,35 +602,9 @@ unsafe extern "C" fn msg_send() {
     core::arch::naked_asm!(
         "test    rdi, rdi",
         "je      9f",
-        // The cached send, probed with r10, r11 and rax, which carries a
-        // variadic call's vector count and so is saved around the probe.
         "push    rax",
         "mov     rax, [rdi]",
-        // A forgotten or empty entry's class is zero.
-        "test    rax, rax",
-        "jz      8f",
-        "mov     r11, rax",
-        "shl     r11, 7",
-        "xor     r11, rsi",
-        "mov     r10, {multiplier}",
-        "imul    r11, r10",
-        "shr     r11, {shift}",
-        "shl     r11, 5",
-        "lea     r10, [rip + {table}]",
-        "add     r10, r11",
-        "mov     r11, [r10]",
-        "test    r11, 1",
-        "jnz     8f",
-        "cmp     rax, [r10 + 8]",
-        "jne     8f",
-        "cmp     rsi, [r10 + 16]",
-        "jne     8f",
-        "mov     rax, [r10 + 24]",
-        "cmp     r11, [r10]",
-        "jne     8f",
-        "mov     r11, rax",
-        "pop     rax",
-        "jmp     r11",
+        x86_64_probe!("rsi", ""),
         "8:",
         "pop     rax",
         "push    rbp",
@@ -589,16 +662,22 @@ unsafe extern "C" fn msg_send() {
 /// [`msg_send`] for a message returning through a buffer, which on x86-64 puts
 /// the buffer in `rdi` and pushes the receiver and selector to `rsi` and `rdx`.
 ///
-/// The lookup call is the only thing that differs: it has to be handed `rsi` and
-/// `rdx` rather than `rdi` and `rsi`. Everything else - the spill, the restore,
-/// the tail jump - is the same, because the implementation is entered with the
-/// registers the call site set, buffer included.
+/// Which registers the probe and the lookup call read is the only thing that
+/// differs: `rsi` and `rdx` rather than `rdi` and `rsi`. Everything else - the
+/// spill, the restore, the tail jump - is the same, because the implementation
+/// is entered with the registers the call site set, buffer included.
 #[cfg(target_arch = "x86_64")]
 #[unsafe(naked)]
 unsafe extern "C" fn msg_send_stret() {
     core::arch::naked_asm!(
         "test    rsi, rsi",
         "je      9f",
+        // The receiver is in rsi and the selector in rdx.
+        "push    rax",
+        "mov     rax, [rsi]",
+        x86_64_probe!("rdx", ""),
+        "8:",
+        "pop     rax",
         "push    rbp",
         "mov     rbp, rsp",
         "sub     rsp, 192",
@@ -651,6 +730,9 @@ unsafe extern "C" fn msg_send_stret() {
         "mov     rax, rdi",
         "ret",
         lookup = sym lookup_stret,
+        table = sym sends::TABLE,
+        multiplier = const sends::MULTIPLIER,
+        shift = const 64 - sends::BITS,
     )
 }
 
@@ -672,10 +754,11 @@ struct Super {
 ///
 /// `sup` must point at a live `objc_super` whose receiver is non-null.
 unsafe extern "C" fn lookup_super(sup: *const Super, sel: Sel) -> *const c_void {
+    let generation = crate::class::generation();
     let sup = unsafe { &*sup };
     // SAFETY: `class` is a class pointer this runtime handed out, or null.
     match unsafe { crate::class::from_ptr(sup.class) } {
-        Some(class) => imp_or_unrecognised(class, sel),
+        Some(class) => imp_or_unrecognised(class, sel, generation),
         None => unrecognised as *const c_void,
     }
 }
@@ -688,16 +771,25 @@ unsafe extern "C" fn lookup_super(sup: *const Super, sel: Sel) -> *const c_void 
 ///
 /// As [`lookup_super`].
 unsafe extern "C" fn lookup_super2(sup: *const Super, sel: Sel) -> *const c_void {
+    let generation = crate::class::generation();
     let sup = unsafe { &*sup };
     match unsafe { crate::class::from_ptr(sup.class) }.and_then(|c| c.superclass()) {
-        Some(class) => imp_or_unrecognised(class, sel),
+        Some(class) => imp_or_unrecognised(class, sel, generation),
         None => unrecognised as *const c_void,
     }
 }
 
-fn imp_or_unrecognised(class: &'static crate::class::Class, sel: Sel) -> *const c_void {
+fn imp_or_unrecognised(
+    class: &'static crate::class::Class,
+    sel: Sel,
+    generation: usize,
+) -> *const c_void {
     match class.method(sel) {
-        Some(method) => method.implementation(),
+        Some(method) => {
+            let imp = method.implementation();
+            sends::remember_class(class, sel, imp, generation);
+            imp
+        }
         None => unrecognised as *const c_void,
     }
 }
@@ -737,14 +829,22 @@ pub fn entry_super2_stret() -> *const c_void {
     }
 }
 
-/// The two `Super` trampolines, which differ only in which lookup they call.
+/// The two `Super` trampolines, which differ only in which lookup they call and
+/// in the class their probe starts from.
 ///
-/// Each is [`msg_send`] with two changes: the receiver is `[x0]`/`[rdi]` rather
-/// than the first argument itself, and it is put back into the argument register
-/// after the lookup - the implementation is entered as if it had been sent
-/// directly.
+/// Each is [`msg_send`] with three changes: the receiver is `[x0]`/`[rdi]`
+/// rather than the first argument itself, and it is put back into the argument
+/// register before the jump - the implementation is entered as if it had been
+/// sent directly - and the cache is probed for the class the search starts at
+/// rather than the receiver's. A direct send to an instance of that class
+/// finds the same method, which is why the two share entries.
 macro_rules! super_trampoline {
-    ($name:ident, $lookup:ident) => {
+    (
+        $name:ident,
+        $lookup:ident,
+        aarch64: [$($aarch64_climb:literal),*],
+        x86_64: [$($x86_64_climb:literal),*]
+    ) => {
         #[cfg(target_arch = "aarch64")]
         #[unsafe(naked)]
         unsafe extern "C" fn $name() {
@@ -752,6 +852,11 @@ macro_rules! super_trampoline {
                 "cbz     x0, 9f",
                 "ldr     x9, [x0]",
                 "cbz     x9, 9f",
+                // The cached send, keyed by the class the search starts at.
+                "ldr     x9, [x0, #8]",
+                $($aarch64_climb,)*
+                aarch64_probe!("ldr     x0, [x0]"),
+                "8:",
                 "stp     x29, x30, [sp, #-16]!",
                 "mov     x29, sp",
                 "sub     sp, sp, #208",
@@ -789,6 +894,12 @@ macro_rules! super_trampoline {
                 "movi    d3, #0",
                 "ret",
                 lookup = sym $lookup,
+                table = sym sends::TABLE,
+                m0 = const sends::MULTIPLIER_CHUNKS[0],
+                m1 = const sends::MULTIPLIER_CHUNKS[1],
+                m2 = const sends::MULTIPLIER_CHUNKS[2],
+                m3 = const sends::MULTIPLIER_CHUNKS[3],
+                shift = const 64 - sends::BITS,
             )
         }
 
@@ -800,6 +911,13 @@ macro_rules! super_trampoline {
                 "je      9f",
                 "cmp     qword ptr [rdi], 0",
                 "je      9f",
+                // The cached send, keyed by the class the search starts at.
+                "push    rax",
+                "mov     rax, [rdi + 8]",
+                $($x86_64_climb,)*
+                x86_64_probe!("rsi", "mov     rdi, [rdi]"),
+                "8:",
+                "pop     rax",
                 "push    rbp",
                 "mov     rbp, rsp",
                 "sub     rsp, 192",
@@ -847,20 +965,29 @@ macro_rules! super_trampoline {
                 "xorps   xmm1, xmm1",
                 "ret",
                 lookup = sym $lookup,
+                table = sym sends::TABLE,
+                multiplier = const sends::MULTIPLIER,
+                shift = const 64 - sends::BITS,
             )
         }
     };
 }
 
-super_trampoline!(msg_send_super, lookup_super);
-super_trampoline!(msg_send_super2, lookup_super2);
+super_trampoline!(msg_send_super, lookup_super, aarch64: [], x86_64: []);
+// The search starts at the superclass, the second word of the class's header.
+super_trampoline!(
+    msg_send_super2,
+    lookup_super2,
+    aarch64: ["cbz     x9, 8f", "ldr     x9, [x9, #8]"],
+    x86_64: ["test    rax, rax", "jz      8f", "mov     rax, [rax + 8]"]
+);
 
 /// The `_stret` spellings of the two above, which exist only on x86-64: the
 /// return buffer takes `rdi`, so the `objc_super` is in `rsi` and the selector
 /// in `rdx`.
 #[cfg(target_arch = "x86_64")]
 macro_rules! super_stret_trampoline {
-    ($name:ident, $lookup:ident) => {
+    ($name:ident, $lookup:ident, [$($climb:literal),*]) => {
         #[unsafe(naked)]
         unsafe extern "C" fn $name() {
             core::arch::naked_asm!(
@@ -868,6 +995,12 @@ macro_rules! super_stret_trampoline {
                 "je      9f",
                 "cmp     qword ptr [rsi], 0",
                 "je      9f",
+                "push    rax",
+                "mov     rax, [rsi + 8]",
+                $($climb,)*
+                x86_64_probe!("rdx", "mov     rsi, [rsi]"),
+                "8:",
+                "pop     rax",
                 "push    rbp",
                 "mov     rbp, rsp",
                 "sub     rsp, 192",
@@ -915,15 +1048,22 @@ macro_rules! super_stret_trampoline {
                 "mov     rax, rdi",
                 "ret",
                 lookup = sym $lookup,
+                table = sym sends::TABLE,
+                multiplier = const sends::MULTIPLIER,
+                shift = const 64 - sends::BITS,
             )
         }
     };
 }
 
 #[cfg(target_arch = "x86_64")]
-super_stret_trampoline!(msg_send_super_stret, lookup_super);
+super_stret_trampoline!(msg_send_super_stret, lookup_super, []);
 #[cfg(target_arch = "x86_64")]
-super_stret_trampoline!(msg_send_super2_stret, lookup_super2);
+super_stret_trampoline!(
+    msg_send_super2_stret,
+    lookup_super2,
+    ["test    rax, rax", "jz      8f", "mov     rax, [rax + 8]"]
+);
 
 /// Guest `objc_class` structures standing for classes of this runtime, keyed by
 /// address, with the range they span so the common case is two compares.
@@ -1155,6 +1295,156 @@ mod tests {
         assert_eq!(send_answer(instance, sel), 2);
     }
 
+    /// Four words, which the System V ABI returns through a buffer.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Quad([u64; 4]);
+
+    unsafe extern "C" fn quad_one(_receiver: Id, _sel: Sel) -> Quad {
+        Quad([1, 2, 3, 4])
+    }
+
+    unsafe extern "C" fn quad_two(_receiver: Id, _sel: Sel) -> Quad {
+        Quad([5, 6, 7, 8])
+    }
+
+    /// `objc_msgSend_stret`, called as a guest calls it.
+    fn send_quad(receiver: Id, sel: Sel) -> Quad {
+        // SAFETY: the trampoline takes any message; this one's signature.
+        let send: unsafe extern "C" fn(Id, Sel) -> Quad =
+            unsafe { std::mem::transmute(entry_stret()) };
+        // SAFETY: a live receiver whose method has this signature.
+        unsafe { send(receiver, sel) }
+    }
+
+    #[test]
+    fn a_cached_struct_return_send_follows_a_replaced_implementation() {
+        crate::bootstrap();
+        let sel = crate::sel!("rosemaryCachedQuad");
+        let nsobject = crate::class::lookup(c"NSObject").expect("NSObject");
+        let class = crate::class::allocate_pair(Some(nsobject), c"RosemaryCachedQuad", 0)
+            .expect("an unused name");
+        assert!(class.add_method(sel, quad_one as crate::class::Imp, c"{Quad=QQQQ}16@0:8"));
+        crate::class::register_pair(class);
+        let instance = crate::object::create_instance(class, 0);
+        assert_eq!(send_quad(instance, sel), Quad([1, 2, 3, 4]));
+        if cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
+            // Retried: another test changing a method table empties the cache.
+            let cached = (0..100).find_map(|_| {
+                assert_eq!(send_quad(instance, sel), Quad([1, 2, 3, 4]));
+                sends::cached(isa(instance), sel as usize)
+            });
+            assert_eq!(cached, Some(quad_one as *const () as usize));
+        }
+        class.replace_method(sel, quad_two as crate::class::Imp, c"{Quad=QQQQ}16@0:8");
+        assert_eq!(send_quad(instance, sel), Quad([5, 6, 7, 8]));
+    }
+
+    unsafe extern "C" fn answer_three(_receiver: Id, _sel: Sel) -> u64 {
+        3
+    }
+
+    /// A subclass of `superclass` answering `sel` with `imp`, if it is given.
+    fn subclass(
+        superclass: &'static crate::class::Class,
+        name: &std::ffi::CStr,
+        answer: Option<(Sel, crate::class::Imp, &std::ffi::CStr)>,
+    ) -> &'static crate::class::Class {
+        let class = crate::class::allocate_pair(Some(superclass), name, 0).expect("unused");
+        if let Some((sel, imp, types)) = answer {
+            assert!(class.add_method(sel, imp, types));
+        }
+        crate::class::register_pair(class);
+        class
+    }
+
+    /// A `[super ...]` send through `entry`, for a method taking no arguments.
+    fn send_super<R>(
+        entry: *const c_void,
+        receiver: Id,
+        class: &'static crate::class::Class,
+        sel: Sel,
+    ) -> R {
+        let sup = Super {
+            receiver,
+            class: crate::class::ptr(class),
+        };
+        // SAFETY: the trampoline takes any message; this one's signature.
+        let send: unsafe extern "C" fn(*const Super, Sel) -> R =
+            unsafe { std::mem::transmute(entry) };
+        // SAFETY: a live receiver whose method has this signature.
+        unsafe { send(&sup, sel) }
+    }
+
+    #[test]
+    fn a_cached_super_send_reaches_the_superclass_method_and_follows_its_replacement() {
+        let sel = crate::sel!("rosemaryCachedSuperAnswer");
+        let base = class_answering(c"RosemaryCachedSuperBase", sel, answer_one);
+        let derived = subclass(
+            base,
+            c"RosemaryCachedSuperDerived",
+            Some((sel, answer_two as crate::class::Imp, c"Q16@0:8")),
+        );
+        let instance = crate::object::create_instance(derived, 0);
+        // A direct send runs `+initialize`, which caching waits for.
+        assert_eq!(send_answer(instance, sel), 2);
+        for _ in 0..2 {
+            assert_eq!(send_super::<u64>(entry_super2(), instance, derived, sel), 1);
+            assert_eq!(send_super::<u64>(entry_super(), instance, base, sel), 1);
+            assert_eq!(send_super::<u64>(entry_super(), instance, derived, sel), 2);
+        }
+        if cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
+            // Retried: another test changing a method table empties the cache.
+            let cached = (0..100).find_map(|_| {
+                assert_eq!(send_super::<u64>(entry_super2(), instance, derived, sel), 1);
+                sends::cached(crate::class::ptr(base) as usize, sel as usize)
+            });
+            assert_eq!(cached, Some(answer_one as *const () as usize));
+        }
+        base.replace_method(sel, answer_three as crate::class::Imp, c"Q16@0:8");
+        assert_eq!(send_super::<u64>(entry_super2(), instance, derived, sel), 3);
+        assert_eq!(send_answer(instance, sel), 2);
+    }
+
+    #[test]
+    fn a_super_send_caches_nothing_for_a_class_not_yet_initialized() {
+        let sel = crate::sel!("rosemaryUninitializedSuperAnswer");
+        let base = class_answering(c"RosemaryUninitializedSuperBase", sel, answer_one);
+        let derived = subclass(base, c"RosemaryUninitializedSuperDerived", None);
+        let instance = crate::object::create_instance(derived, 0);
+        assert_eq!(send_super::<u64>(entry_super2(), instance, derived, sel), 1);
+        assert_eq!(
+            sends::cached(crate::class::ptr(base) as usize, sel as usize),
+            None
+        );
+    }
+
+    #[test]
+    fn a_cached_struct_return_super_send_reaches_the_superclass_method() {
+        crate::bootstrap();
+        let sel = crate::sel!("rosemaryCachedSuperQuad");
+        let nsobject = crate::class::lookup(c"NSObject").expect("NSObject");
+        let types = c"{Quad=QQQQ}16@0:8";
+        let base = subclass(
+            nsobject,
+            c"RosemaryCachedSuperQuadBase",
+            Some((sel, quad_one as crate::class::Imp, types)),
+        );
+        let derived = subclass(
+            base,
+            c"RosemaryCachedSuperQuadDerived",
+            Some((sel, quad_two as crate::class::Imp, types)),
+        );
+        let instance = crate::object::create_instance(derived, 0);
+        assert_eq!(send_quad(instance, sel), Quad([5, 6, 7, 8]));
+        for _ in 0..2 {
+            let quad: Quad = send_super(entry_super2_stret(), instance, derived, sel);
+            assert_eq!(quad, Quad([1, 2, 3, 4]));
+            let quad: Quad = send_super(entry_super_stret(), instance, derived, sel);
+            assert_eq!(quad, Quad([5, 6, 7, 8]));
+        }
+    }
+
     #[test]
     fn classes_sharing_a_selector_each_reach_their_own_method() {
         let sel = crate::sel!("rosemaryCachedShared");
@@ -1255,6 +1545,34 @@ mod tests {
         assert_eq!(total, SENDS);
         eprintln!(
             "send: {:.2} ns each",
+            start.elapsed().as_nanos() as f64 / SENDS as f64
+        );
+    }
+
+    /// Dispatch cost of a `[super ...]` send whose method is found. Run with
+    /// `cargo test --release -p objc -- --ignored --nocapture super_send_cost`.
+    #[test]
+    #[ignore = "a benchmark, not a check"]
+    fn super_send_cost() {
+        const SENDS: u64 = 20_000_000;
+        let sel = crate::sel!("rosemaryBenchmarkSuperAnswer");
+        let base = class_answering(c"RosemaryBenchmarkSuperBase", sel, answer_one);
+        let derived = subclass(
+            base,
+            c"RosemaryBenchmarkSuperDerived",
+            Some((sel, answer_two as crate::class::Imp, c"Q16@0:8")),
+        );
+        let instance = crate::object::create_instance(derived, 0);
+        assert_eq!(send_answer(instance, sel), 2);
+        let start = std::time::Instant::now();
+        let mut total = 0;
+        for _ in 0..SENDS {
+            total +=
+                send_super::<u64>(entry_super2(), std::hint::black_box(instance), derived, sel);
+        }
+        assert_eq!(total, SENDS);
+        eprintln!(
+            "super send: {:.2} ns each",
             start.elapsed().as_nanos() as f64 / SENDS as f64
         );
     }
