@@ -55,6 +55,24 @@ pub(crate) fn coordinate_lanes(texture: &TextureType) -> u8 {
     }
 }
 
+/// [`operand_type`] without the copy, for a caller which only compares or
+/// inspects it: a type is a tree, and cloning one is an allocation per node.
+pub(crate) fn operand_type_ref<'a>(
+    function: &'a Function,
+    operand: &'a Operand,
+) -> Option<&'a Type> {
+    static BOOL: Type = Type::Bool;
+    match operand {
+        Operand::Composite { ty, .. }
+        | Operand::Integer { ty, .. }
+        | Operand::Float { ty, .. }
+        | Operand::Global { ty, .. }
+        | Operand::Undef(ty) => Some(ty),
+        Operand::Value(value) => function.values.get(value.0 as usize),
+        Operand::Bool(_) => Some(&BOOL),
+    }
+}
+
 pub(crate) fn operand_type(function: &Function, operand: &Operand) -> Option<Type> {
     match operand {
         Operand::Composite { ty, .. } => Some(ty.clone()),

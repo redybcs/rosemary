@@ -10,7 +10,7 @@ pub(crate) use dominance::Dominance;
 use operands::resource_namespace;
 pub(crate) use operands::{
     coordinate_lanes, instruction_name, instruction_operands, instruction_operands_mut,
-    is_boolean_or_boolean_vector, operand_type, successors, terminator_operands,
+    is_boolean_or_boolean_vector, operand_type, operand_type_ref, successors, terminator_operands,
 };
 use verify::verify_function;
 

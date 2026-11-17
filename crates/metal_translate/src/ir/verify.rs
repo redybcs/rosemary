@@ -134,7 +134,7 @@ pub(super) fn verify_function(function: &Function, diagnostics: &mut Vec<Diagnos
             );
         }
         if let Terminator::CondBranch { condition, .. } = &block.terminator
-            && operand_type(function, condition) != Some(Type::Bool)
+            && operand_type_ref(function, condition) != Some(&Type::Bool)
         {
             diagnostics.push(Diagnostic::new(
                 Phase::IrVerification,
@@ -152,7 +152,7 @@ pub(super) fn verify_function(function: &Function, diagnostics: &mut Vec<Diagnos
                 ))
             }
             Terminator::Return(Some(value))
-                if operand_type(function, value) != Some(function.result.clone()) =>
+                if operand_type_ref(function, value) != Some(&function.result) =>
             {
                 diagnostics.push(Diagnostic::new(
                     Phase::IrVerification,
@@ -287,8 +287,7 @@ fn verify_instruction_types(
 ) {
     let result = instruction
         .result
-        .and_then(|value| function.values.get(value.0 as usize))
-        .cloned();
+        .and_then(|value| function.values.get(value.0 as usize));
     let valid = match &instruction.kind {
         InstructionKind::LocalVariable { .. }
         | InstructionKind::Load { .. }
@@ -360,14 +359,12 @@ fn invalid(function: &Function, instruction: &Instruction, diagnostics: &mut Vec
 }
 
 fn optional_is(function: &Function, operand: Option<&Operand>, expected: &Type) -> bool {
-    operand.is_none_or(|operand| operand_type(function, operand).as_ref() == Some(expected))
+    operand.is_none_or(|operand| operand_type_ref(function, operand) == Some(expected))
 }
 
 fn optional_integer_vector(function: &Function, operand: Option<&Operand>) -> bool {
     operand.is_none_or(|operand| {
-        operand_type(function, operand)
-            .as_ref()
-            .is_some_and(is_integer_or_integer_vector)
+        operand_type_ref(function, operand).is_some_and(is_integer_or_integer_vector)
     })
 }
 
@@ -386,7 +383,7 @@ fn coordinate_shape(
             lanes,
         }
     };
-    operand_type(function, coordinate) == Some(expected)
+    operand_type_ref(function, coordinate) == Some(&expected)
 }
 
 /// Metal always returns four components from a texture access, whatever the
@@ -408,15 +405,19 @@ fn is_integer_or_integer_vector(ty: &Type) -> bool {
         || matches!(ty, Type::Vector { element, .. } if matches!(element.as_ref(), Type::Int { .. }))
 }
 
-/// The boolean result of an elementwise comparison keeps the operand's shape:
-/// a scalar comparison yields `bool`, a vector comparison yields `bool` lanes.
-fn boolean_shape(ty: Type) -> Type {
-    match ty {
-        Type::Vector { lanes, .. } => Type::Vector {
-            element: Box::new(Type::Bool),
-            lanes,
-        },
-        _ => Type::Bool,
+/// Whether `result` is the boolean result of an elementwise comparison of
+/// `operand`s, which keeps the operand's shape: a scalar comparison yields
+/// `bool`, a vector comparison yields `bool` lanes.
+fn has_boolean_shape(result: Option<&Type>, operand: Option<&Type>) -> bool {
+    match (result, operand) {
+        (None, None) => true,
+        (Some(result), Some(Type::Vector { lanes, .. })) => matches!(
+            result,
+            Type::Vector { element, lanes: result_lanes }
+                if result_lanes == lanes && **element == Type::Bool
+        ),
+        (Some(result), Some(_)) => *result == Type::Bool,
+        _ => false,
     }
 }
 
@@ -425,7 +426,7 @@ fn boolean_shape(ty: Type) -> Type {
 /// A bitcast is the exception: it reinterprets the same bits, so it may change
 /// the lane count as long as the total width is unchanged. Metal reads a
 /// `float4` back as a `half8` or a `uint2` as a `float2` this way.
-fn verify_convert(op: ConvertOp, source: Option<Type>, result: Option<&Type>) -> bool {
+fn verify_convert(op: ConvertOp, source: Option<&Type>, result: Option<&Type>) -> bool {
     let (Some(source), Some(result)) = (source, result) else {
         return false;
     };
@@ -438,12 +439,12 @@ fn verify_convert(op: ConvertOp, source: Option<Type>, result: Option<&Type>) ->
             return matches!(source, Type::Int { bits: 32, .. }) && *result == float2;
         }
         ConvertOp::PackHalf2x16 => {
-            return source == float2 && matches!(result, Type::Int { bits: 32, .. });
+            return *source == float2 && matches!(result, Type::Int { bits: 32, .. });
         }
         _ => {}
     }
-    if op == ConvertOp::Bitcast && reinterpretable(&source) && reinterpretable(result) {
-        return total_bits(&source) == total_bits(result) && total_bits(&source).is_some();
+    if op == ConvertOp::Bitcast && reinterpretable(source) && reinterpretable(result) {
+        return total_bits(source) == total_bits(result) && total_bits(source).is_some();
     }
     let (source, result) = match (source, result) {
         (
@@ -455,13 +456,11 @@ fn verify_convert(op: ConvertOp, source: Option<Type>, result: Option<&Type>) ->
                 element: result,
                 lanes: result_lanes,
             },
-        ) if lanes == *result_lanes => (*source, result.as_ref().clone()),
-        (source @ (Type::Int { .. } | Type::Float { .. } | Type::Bool), result) => {
-            (source, result.clone())
-        }
+        ) if lanes == result_lanes => (source.as_ref(), result.as_ref()),
+        (source @ (Type::Int { .. } | Type::Float { .. } | Type::Bool), result) => (source, result),
         _ => return false,
     };
-    match (op, &source, &result) {
+    match (op, source, result) {
         // Metal's `bool` is LLVM's `i1`, which widens and narrows like any
         // other integer even though SPIR-V keeps booleans a separate type.
         (
@@ -493,7 +492,7 @@ fn verify_convert(op: ConvertOp, source: Option<Type>, result: Option<&Type>) ->
             from != to
         }
         // A bitcast is only meaningful between equally sized representations.
-        (ConvertOp::Bitcast, _, _) => scalar_bits(&source) == scalar_bits(&result),
+        (ConvertOp::Bitcast, _, _) => scalar_bits(source) == scalar_bits(result),
         _ => false,
     }
 }
@@ -526,70 +525,81 @@ fn scalar_bits(ty: &Type) -> Option<u8> {
 }
 
 /// Whether pointers, loads, stores and address computation has the operand and result types Metal gives it.
-fn memory_is_well_typed(function: &Function, kind: &InstructionKind, result: Option<Type>) -> bool {
+fn memory_is_well_typed(
+    function: &Function,
+    kind: &InstructionKind,
+    result: Option<&Type>,
+) -> bool {
     match kind {
         InstructionKind::LocalVariable { ty } => matches!(
             &result,
             Some(Type::Pointer { space, pointee })
                 if *space == AddressSpace::Thread && pointee.as_ref() == ty
         ),
-        InstructionKind::Load { pointer } => match operand_type(function, pointer) {
-            Some(Type::Pointer { pointee, .. }) => result.as_ref() == Some(pointee.as_ref()),
+        InstructionKind::Load { pointer } => match operand_type_ref(function, pointer) {
+            Some(Type::Pointer { pointee, .. }) => result == Some(pointee.as_ref()),
             _ => false,
         },
-        InstructionKind::Store { pointer, value } => match operand_type(function, pointer) {
+        InstructionKind::Store { pointer, value } => match operand_type_ref(function, pointer) {
             Some(Type::Pointer { pointee, .. }) => {
-                Some(pointee.as_ref().clone()) == operand_type(function, value)
+                Some(pointee.as_ref()) == operand_type_ref(function, value)
             }
             _ => false,
         },
         InstructionKind::ElementAddress { pointer, index } => {
             matches!(result, Some(Type::Pointer { .. }))
-                && matches!(operand_type(function, pointer), Some(Type::Pointer { .. }))
-                && operand_type(function, index).is_some_and(|ty| matches!(ty, Type::Int { .. }))
+                && matches!(
+                    operand_type_ref(function, pointer),
+                    Some(Type::Pointer { .. })
+                )
+                && operand_type_ref(function, index)
+                    .is_some_and(|ty| matches!(ty, Type::Int { .. }))
         }
         InstructionKind::FieldAddress { pointer, .. } => {
             matches!(result, Some(Type::Pointer { .. }))
-                && matches!(operand_type(function, pointer), Some(Type::Pointer { .. }))
+                && matches!(
+                    operand_type_ref(function, pointer),
+                    Some(Type::Pointer { .. })
+                )
         }
         InstructionKind::BufferAddress { pointer, indices } => (|| {
-            let Some(Type::Pointer { space, pointee }) = operand_type(function, pointer) else {
+            let Some(Type::Pointer { space, pointee }) = operand_type_ref(function, pointer) else {
                 return false;
             };
-            let mut ty = *pointee;
+            let mut ty: &Type = pointee;
             let mut valid = !indices.is_empty();
             for (position, index) in indices.iter().enumerate() {
-                valid &= matches!(operand_type(function, index), Some(Type::Int { .. }));
+                valid &= matches!(operand_type_ref(function, index), Some(Type::Int { .. }));
                 if position == 0 {
                     continue;
                 }
                 ty = match ty {
-                    Type::Struct(ref structure) => {
+                    Type::Struct(structure) => {
                         if let Operand::Integer { value, .. } = index {
                             if let Some(field) = structure.fields.get(*value as usize) {
-                                field.ty.clone()
+                                &field.ty
                             } else {
                                 valid = false;
-                                Type::Void
+                                &Type::Void
                             }
                         } else {
                             valid = false;
-                            Type::Void
+                            &Type::Void
                         }
                     }
-                    Type::Array { element, .. } | Type::Vector { element, .. } => *element,
+                    Type::Array { element, .. } | Type::Vector { element, .. } => element,
                     _ => {
                         valid = false;
-                        Type::Void
+                        &Type::Void
                     }
                 };
             }
             valid
-                && result
-                    == Some(Type::Pointer {
-                        space,
-                        pointee: Box::new(ty),
-                    })
+                && matches!(
+                    result,
+                    Some(Type::Pointer { space: found, pointee: found_pointee })
+                        if found == space && found_pointee.as_ref() == ty
+                )
         })(),
         _ => unreachable!("not a memory instruction"),
     }
@@ -599,7 +609,7 @@ fn memory_is_well_typed(function: &Function, kind: &InstructionKind, result: Opt
 fn arithmetic_is_well_typed(
     function: &Function,
     kind: &InstructionKind,
-    result: Option<Type>,
+    result: Option<&Type>,
 ) -> bool {
     match kind {
         InstructionKind::IntegerBinary { op, lhs, rhs } => {
@@ -608,95 +618,89 @@ fn arithmetic_is_well_typed(
             let boolean = matches!(
                 op,
                 IntegerBinaryOp::And | IntegerBinaryOp::Or | IntegerBinaryOp::Xor
-            ) && result.as_ref().is_some_and(is_boolean_or_boolean_vector);
-            (boolean || result.as_ref().is_some_and(is_integer_or_integer_vector))
-                && result == operand_type(function, lhs)
-                && result == operand_type(function, rhs)
+            ) && result.is_some_and(is_boolean_or_boolean_vector);
+            (boolean || result.is_some_and(is_integer_or_integer_vector))
+                && result == operand_type_ref(function, lhs)
+                && result == operand_type_ref(function, rhs)
         }
         InstructionKind::IntegerUnary { value, .. } => {
-            result == operand_type(function, value)
-                && result.as_ref().is_some_and(is_integer_or_integer_vector)
+            result == operand_type_ref(function, value)
+                && result.is_some_and(is_integer_or_integer_vector)
         }
         InstructionKind::IntegerClamp {
             value, min, max, ..
         } => {
-            result == operand_type(function, value)
-                && result == operand_type(function, min)
-                && result == operand_type(function, max)
-                && result.as_ref().is_some_and(is_integer_or_integer_vector)
+            result == operand_type_ref(function, value)
+                && result == operand_type_ref(function, min)
+                && result == operand_type_ref(function, max)
+                && result.is_some_and(is_integer_or_integer_vector)
         }
         InstructionKind::IntegerCompare { lhs, rhs, .. } => {
-            operand_type(function, lhs) == operand_type(function, rhs)
-                && operand_type(function, lhs)
-                    .as_ref()
-                    .is_some_and(is_integer_or_integer_vector)
-                && result == operand_type(function, lhs).map(boolean_shape)
+            operand_type_ref(function, lhs) == operand_type_ref(function, rhs)
+                && operand_type_ref(function, lhs).is_some_and(is_integer_or_integer_vector)
+                && has_boolean_shape(result, operand_type_ref(function, lhs))
         }
         InstructionKind::FloatBinary { lhs, rhs, .. } => {
-            result == operand_type(function, lhs)
-                && result == operand_type(function, rhs)
-                && result.as_ref().is_some_and(is_float_or_float_vector)
+            result == operand_type_ref(function, lhs)
+                && result == operand_type_ref(function, rhs)
+                && result.is_some_and(is_float_or_float_vector)
         }
         InstructionKind::FloatUnary { value, .. } => {
-            result == operand_type(function, value)
-                && result.as_ref().is_some_and(is_float_or_float_vector)
+            result == operand_type_ref(function, value)
+                && result.is_some_and(is_float_or_float_vector)
         }
         InstructionKind::FloatCompare { lhs, rhs, .. } => {
-            operand_type(function, lhs) == operand_type(function, rhs)
-                && operand_type(function, lhs)
-                    .as_ref()
-                    .is_some_and(is_float_or_float_vector)
-                && result == operand_type(function, lhs).map(boolean_shape)
+            operand_type_ref(function, lhs) == operand_type_ref(function, rhs)
+                && operand_type_ref(function, lhs).is_some_and(is_float_or_float_vector)
+                && has_boolean_shape(result, operand_type_ref(function, lhs))
         }
         InstructionKind::FloatFma {
             first,
             second,
             addend,
         } => {
-            result == operand_type(function, first)
-                && result == operand_type(function, second)
-                && result == operand_type(function, addend)
-                && result.as_ref().is_some_and(is_float_or_float_vector)
+            result == operand_type_ref(function, first)
+                && result == operand_type_ref(function, second)
+                && result == operand_type_ref(function, addend)
+                && result.is_some_and(is_float_or_float_vector)
         }
         InstructionKind::FloatDot { lhs, rhs } => {
-            operand_type(function, lhs) == operand_type(function, rhs)
-                && matches!(operand_type(function, lhs), Some(Type::Vector { element, .. }) if matches!(element.as_ref(), Type::Float { .. }))
-                && result == Some(Type::Float { bits: 32 })
+            operand_type_ref(function, lhs) == operand_type_ref(function, rhs)
+                && matches!(operand_type_ref(function, lhs), Some(Type::Vector { element, .. }) if matches!(element.as_ref(), Type::Float { .. }))
+                && result == Some(&Type::Float { bits: 32 })
         }
         InstructionKind::FloatRefract {
             incident,
             normal,
             ratio,
         } => {
-            let component = match &result {
+            let component = match result {
                 Some(Type::Vector {
                     element,
                     lanes: 2..=4,
-                }) if matches!(element.as_ref(), Type::Float { .. }) => {
-                    Some(element.as_ref().clone())
-                }
+                }) if matches!(element.as_ref(), Type::Float { .. }) => Some(element.as_ref()),
                 _ => None,
             };
             component.is_some()
-                && result == operand_type(function, incident)
-                && result == operand_type(function, normal)
-                && component == operand_type(function, ratio)
+                && result == operand_type_ref(function, incident)
+                && result == operand_type_ref(function, normal)
+                && component == operand_type_ref(function, ratio)
         }
         InstructionKind::FloatClamp { value, min, max } => {
-            result == operand_type(function, value)
-                && result == operand_type(function, min)
-                && result == operand_type(function, max)
-                && result.as_ref().is_some_and(is_float_or_float_vector)
+            result == operand_type_ref(function, value)
+                && result == operand_type_ref(function, min)
+                && result == operand_type_ref(function, max)
+                && result.is_some_and(is_float_or_float_vector)
         }
         InstructionKind::FloatMix {
             first,
             second,
             weight,
         } => {
-            result == operand_type(function, first)
-                && result == operand_type(function, second)
-                && result == operand_type(function, weight)
-                && result.as_ref().is_some_and(is_float_or_float_vector)
+            result == operand_type_ref(function, first)
+                && result == operand_type_ref(function, second)
+                && result == operand_type_ref(function, weight)
+                && result.is_some_and(is_float_or_float_vector)
         }
         _ => unreachable!("not a arithmetic instruction"),
     }
@@ -706,23 +710,19 @@ fn arithmetic_is_well_typed(
 fn composite_is_well_typed(
     function: &Function,
     kind: &InstructionKind,
-    result: Option<Type>,
+    result: Option<&Type>,
 ) -> bool {
     match kind {
         InstructionKind::CompositeExtract { composite, index } => {
-            match operand_type(function, composite) {
+            match operand_type_ref(function, composite) {
                 Some(Type::Struct(structure)) => {
-                    structure
-                        .fields
-                        .get(*index as usize)
-                        .map(|field| field.ty.clone())
-                        == result
+                    structure.fields.get(*index as usize).map(|field| &field.ty) == result
                 }
                 Some(Type::Vector { element, lanes }) => {
-                    *index < u32::from(lanes) && result.as_ref() == Some(element.as_ref())
+                    *index < u32::from(*lanes) && result == Some(element.as_ref())
                 }
                 Some(Type::Array { element, count }) => {
-                    *index < count && result.as_ref() == Some(element.as_ref())
+                    *index < *count && result == Some(element.as_ref())
                 }
                 _ => false,
             }
@@ -731,87 +731,87 @@ fn composite_is_well_typed(
             composite,
             object,
             index,
-        } => match operand_type(function, composite) {
+        } => match operand_type_ref(function, composite) {
             Some(Type::Vector { element, lanes }) => {
-                *index < u32::from(lanes)
-                    && operand_type(function, object) == Some(*element)
-                    && result == operand_type(function, composite)
+                *index < u32::from(*lanes)
+                    && operand_type_ref(function, object) == Some(element.as_ref())
+                    && result == operand_type_ref(function, composite)
             }
             Some(Type::Array { element, count }) => {
-                *index < count
-                    && operand_type(function, object) == Some(*element)
-                    && result == operand_type(function, composite)
+                *index < *count
+                    && operand_type_ref(function, object) == Some(element.as_ref())
+                    && result == operand_type_ref(function, composite)
             }
             Some(Type::Struct(structure)) => {
-                structure
-                    .fields
-                    .get(*index as usize)
-                    .map(|field| field.ty.clone())
-                    == operand_type(function, object)
-                    && result == operand_type(function, composite)
+                structure.fields.get(*index as usize).map(|field| &field.ty)
+                    == operand_type_ref(function, object)
+                    && result == operand_type_ref(function, composite)
             }
             _ => false,
         },
         InstructionKind::VectorExtractDynamic { vector, index } => {
-            matches!(operand_type(function, index), Some(Type::Int { .. }))
-                && matches!(operand_type(function, vector),
-                    Some(Type::Vector { element, .. }) if result.as_ref() == Some(element.as_ref()))
+            matches!(operand_type_ref(function, index), Some(Type::Int { .. }))
+                && matches!(operand_type_ref(function, vector),
+                    Some(Type::Vector { element, .. }) if result == Some(element.as_ref()))
         }
         InstructionKind::VectorInsertDynamic {
             vector,
             object,
             index,
         } => {
-            matches!(operand_type(function, index), Some(Type::Int { .. }))
-                && matches!(operand_type(function, vector),
-                    Some(Type::Vector { ref element, .. }) if operand_type(function, object).as_ref() == Some(element.as_ref()))
-                && result == operand_type(function, vector)
+            matches!(operand_type_ref(function, index), Some(Type::Int { .. }))
+                && matches!(operand_type_ref(function, vector),
+                    Some(Type::Vector { element, .. }) if operand_type_ref(function, object) == Some(element.as_ref()))
+                && result == operand_type_ref(function, vector)
         }
         InstructionKind::VectorShuffle {
             first,
             second,
             components,
-        } => match operand_type(function, first) {
-            Some(Type::Vector { element, lanes }) => {
-                operand_type(function, second)
-                    == Some(Type::Vector {
-                        element: element.clone(),
-                        lanes,
-                    })
-                    && result
-                        == Some(Type::Vector {
-                            element,
-                            lanes: components.len() as u8,
-                        })
+        } => match operand_type_ref(function, first) {
+            Some(first @ Type::Vector { element, .. }) => {
+                operand_type_ref(function, second) == Some(first)
+                    && matches!(
+                        result,
+                        Some(Type::Vector { element: result_element, lanes: result_lanes })
+                            if result_element == element
+                                && *result_lanes == components.len() as u8
+                    )
             }
             _ => false,
         },
         InstructionKind::VectorSplat { value, lanes } => {
-            result
-                == operand_type(function, value).map(|element| Type::Vector {
-                    element: Box::new(element),
-                    lanes: *lanes,
-                })
+            match (result, operand_type_ref(function, value)) {
+                (None, None) => true,
+                (
+                    Some(Type::Vector {
+                        element,
+                        lanes: result_lanes,
+                    }),
+                    Some(value),
+                ) => result_lanes == lanes && element.as_ref() == value,
+                _ => false,
+            }
         }
         InstructionKind::All { vector } | InstructionKind::Any { vector } => {
-            matches!(operand_type(function, vector), Some(Type::Vector { element, .. }) if *element == Type::Bool)
-                && result == Some(Type::Bool)
+            matches!(operand_type_ref(function, vector), Some(Type::Vector { element, .. }) if **element == Type::Bool)
+                && result == Some(&Type::Bool)
         }
         InstructionKind::Select {
             condition,
             on_true,
             on_false,
         } => {
-            result == operand_type(function, on_true)
-                && result == operand_type(function, on_false)
-                && (operand_type(function, condition) == Some(Type::Bool)
-                    || matches!((&result, operand_type(function, condition)), (Some(Type::Vector { lanes, .. }), Some(Type::Vector { element, lanes: n })) if *element == Type::Bool && *lanes == n))
+            result == operand_type_ref(function, on_true)
+                && result == operand_type_ref(function, on_false)
+                && (operand_type_ref(function, condition) == Some(&Type::Bool)
+                    || matches!((result, operand_type_ref(function, condition)), (Some(Type::Vector { lanes, .. }), Some(Type::Vector { element, lanes: n })) if **element == Type::Bool && lanes == n))
         }
         InstructionKind::Phi { incomings } => {
             result.is_some()
                 && incomings
                     .iter()
-                    .all(|(_, value)| operand_type(function, value) == result)
+                    .all(|(_, value)| operand_type_ref(function, value) == result)
         }
         _ => unreachable!("not a composite instruction"),
     }
@@ -821,11 +821,11 @@ fn composite_is_well_typed(
 fn convert_is_well_typed(
     function: &Function,
     kind: &InstructionKind,
-    result: Option<Type>,
+    result: Option<&Type>,
 ) -> bool {
     match kind {
         InstructionKind::Convert { op, value } => {
-            verify_convert(*op, operand_type(function, value), result.as_ref())
+            verify_convert(*op, operand_type_ref(function, value), result)
         }
         _ => unreachable!("not a convert instruction"),
     }
@@ -835,7 +835,7 @@ fn convert_is_well_typed(
 fn texture_is_well_typed(
     function: &Function,
     kind: &InstructionKind,
-    result: Option<Type>,
+    result: Option<&Type>,
 ) -> bool {
     match kind {
         InstructionKind::TextureSample {
@@ -850,18 +850,18 @@ fn texture_is_well_typed(
             compare,
             gather,
         } => {
-            let Some(Type::Texture(texture)) = operand_type(function, texture) else {
+            let Some(Type::Texture(texture)) = operand_type_ref(function, texture) else {
                 return false;
             };
             // A comparison yields one value, only from a depth texture, and
             // never alongside a gather.
             let compare_agrees = match compare {
-                None => result == Some(texel_vector(&texture)),
+                None => result == Some(&texel_vector(texture)),
                 Some(reference) => {
                     texture.depth
                         && gather.is_none()
-                        && operand_type(function, reference) == Some(Type::Float { bits: 32 })
-                        && result == Some(Type::Float { bits: 32 })
+                        && operand_type_ref(function, reference) == Some(&Type::Float { bits: 32 })
+                        && result == Some(&Type::Float { bits: 32 })
                 }
             };
             // A gradient names the level of detail, so a sample carries one or
@@ -870,17 +870,17 @@ fn texture_is_well_typed(
                 None => true,
                 Some((dx, dy)) => {
                     lod.is_none()
-                        && operand_type(function, dx).is_some()
-                        && operand_type(function, dx) == operand_type(function, dy)
+                        && operand_type_ref(function, dx).is_some()
+                        && operand_type_ref(function, dx) == operand_type_ref(function, dy)
                 }
             };
             // A bias adjusts the implicit level, so it excludes the other two.
             let bias_agrees = bias.is_none() || (lod.is_none() && gradient.is_none());
             gradients_agree
                 && bias_agrees
-                && operand_type(function, sampler) == Some(Type::Sampler)
+                && operand_type_ref(function, sampler) == Some(&Type::Sampler)
                 && texture.access == Access::Sample
-                && coordinate_shape(function, coordinate, &texture, Type::Float { bits: 32 })
+                && coordinate_shape(function, coordinate, texture, Type::Float { bits: 32 })
                 && optional_is(function, array_index.as_ref(), &Type::u32())
                 && optional_integer_vector(function, offset.as_ref())
                 && optional_is(function, lod.as_ref(), &Type::Float { bits: 32 })
@@ -894,19 +894,19 @@ fn texture_is_well_typed(
             lod,
             sample,
         } => {
-            let Some(Type::Texture(texture)) = operand_type(function, texture) else {
+            let Some(Type::Texture(texture)) = operand_type_ref(function, texture) else {
                 return false;
             };
-            coordinate_shape(function, coordinate, &texture, Type::u32())
+            coordinate_shape(function, coordinate, texture, Type::u32())
                 && optional_is(function, array_index.as_ref(), &Type::u32())
                 && optional_is(function, lod.as_ref(), &Type::u32())
                 && optional_is(function, sample.as_ref(), &Type::u32())
-                && result == Some(texel_vector(&texture))
+                && result == Some(&texel_vector(texture))
         }
         InstructionKind::TextureQuerySize { texture, lod, .. } => {
-            matches!(operand_type(function, texture), Some(Type::Texture(_)))
+            matches!(operand_type_ref(function, texture), Some(Type::Texture(_)))
                 && optional_is(function, lod.as_ref(), &Type::u32())
-                && result == Some(Type::u32())
+                && result == Some(&Type::u32())
         }
         InstructionKind::TextureWrite {
             texture,
@@ -914,25 +914,25 @@ fn texture_is_well_typed(
             array_index,
             value,
         } => {
-            let Some(Type::Texture(texture)) = operand_type(function, texture) else {
+            let Some(Type::Texture(texture)) = operand_type_ref(function, texture) else {
                 return false;
             };
             result.is_none()
                 && texture.access != Access::Sample
-                && coordinate_shape(function, coordinate, &texture, Type::u32())
+                && coordinate_shape(function, coordinate, texture, Type::u32())
                 && optional_is(function, array_index.as_ref(), &Type::u32())
-                && operand_type(function, value) == Some(texel_vector(&texture))
+                && operand_type_ref(function, value) == Some(&texel_vector(texture))
         }
         _ => unreachable!("not a texture instruction"),
     }
 }
 
 /// Whether built-ins, barriers, atomics and fragment discard has the operand and result types Metal gives it.
-fn sync_is_well_typed(function: &Function, kind: &InstructionKind, result: Option<Type>) -> bool {
+fn sync_is_well_typed(function: &Function, kind: &InstructionKind, result: Option<&Type>) -> bool {
     match kind {
         InstructionKind::GlobalInvocationId => {
             result
-                == Some(Type::Vector {
+                == Some(&Type::Vector {
                     element: Box::new(Type::u32()),
                     lanes: 3,
                 })
@@ -943,16 +943,16 @@ fn sync_is_well_typed(function: &Function, kind: &InstructionKind, result: Optio
             // Metal's atomics are on 32-bit integers in `device` or
             // `threadgroup` memory, and the result is the value that was
             // there.
-            let Some(Type::Pointer { space, pointee }) = operand_type(function, pointer) else {
+            let Some(Type::Pointer { space, pointee }) = operand_type_ref(function, pointer) else {
                 return false;
             };
             matches!(space, AddressSpace::Device | AddressSpace::Threadgroup)
-                && matches!(*pointee, Type::Int { bits: 32, .. })
-                && operand_type(function, value).as_ref() == Some(&*pointee)
-                && result == Some(*pointee)
+                && matches!(pointee.as_ref(), Type::Int { bits: 32, .. })
+                && operand_type_ref(function, value) == Some(pointee)
+                && result == Some(pointee.as_ref())
         }
         InstructionKind::FunctionConstantDefined { constant } => {
-            result == Some(Type::Bool) && matches!(constant, Operand::Global { .. })
+            result == Some(&Type::Bool) && matches!(constant, Operand::Global { .. })
         }
         _ => unreachable!("not a sync instruction"),
     }
@@ -1055,5 +1055,75 @@ mod tests {
     fn accepts_a_use_in_an_unreachable_cycle() {
         let blocks = vec![(0, END), (1, branch(2)), (2, branch(1))];
         assert!(function(blocks, 0, 2).verify().is_ok());
+    }
+
+    fn vector(element: Type, lanes: u8) -> Type {
+        Type::Vector {
+            element: Box::new(element),
+            lanes,
+        }
+    }
+
+    /// One block computing `%1 = kind`, where `%0` is a parameter of type
+    /// `operand` and `%1` has type `result`.
+    fn computing(operand: Type, result: Type, kind: InstructionKind) -> Function {
+        Function {
+            name: "f".to_string(),
+            result: Type::Void,
+            parameters: vec![Parameter {
+                value: ValueId(0),
+                name: "x".to_string(),
+                ty: operand.clone(),
+            }],
+            values: vec![operand, result],
+            blocks: vec![Block {
+                id: BlockId(0),
+                name: String::new(),
+                instructions: vec![Instruction {
+                    result: Some(ValueId(1)),
+                    kind,
+                }],
+                terminator: END,
+            }],
+        }
+    }
+
+    fn compare() -> InstructionKind {
+        InstructionKind::FloatCompare {
+            predicate: FloatPredicate::OrderedLessThan,
+            lhs: Operand::Value(ValueId(0)),
+            rhs: Operand::Value(ValueId(0)),
+        }
+    }
+
+    #[test]
+    fn a_vector_comparison_answers_a_boolean_vector_of_its_lanes() {
+        let float4 = vector(Type::Float { bits: 32 }, 4);
+        let accepted = computing(float4.clone(), vector(Type::Bool, 4), compare());
+        assert!(accepted.verify().is_ok());
+        let scalar = computing(float4.clone(), Type::Bool, compare());
+        assert!(scalar.verify().is_err());
+        let narrower = computing(float4, vector(Type::Bool, 2), compare());
+        assert!(narrower.verify().is_err());
+        let float = Type::Float { bits: 32 };
+        assert!(computing(float, Type::Bool, compare()).verify().is_ok());
+    }
+
+    #[test]
+    fn a_splat_answers_its_operand_in_every_lane() {
+        let splat = |lanes| InstructionKind::VectorSplat {
+            value: Operand::Value(ValueId(0)),
+            lanes,
+        };
+        let float = Type::Float { bits: 32 };
+        let float3 = vector(float.clone(), 3);
+        assert!(
+            computing(float.clone(), float3.clone(), splat(3))
+                .verify()
+                .is_ok()
+        );
+        assert!(computing(float.clone(), float3, splat(4)).verify().is_err());
+        let int3 = vector(Type::u32(), 3);
+        assert!(computing(float, int3, splat(3)).verify().is_err());
     }
 }
