@@ -430,7 +430,6 @@ pub const STRING_GLOBALS: &[(&str, &str)] = &[
     ("_NSURLIsWritableKey", "NSURLIsWritableKey"),
     ("_NSURLIsReadableKey", "NSURLIsReadableKey"),
     ("_NSURLIsExecutableKey", "NSURLIsExecutableKey"),
-    ("_NSURLTypeIdentifierKey", "NSURLTypeIdentifierKey"),
     ("_NSArgumentDomain", "NSArgumentDomain"),
     ("_NSGlobalDomain", "NSGlobalDomain"),
     ("_NSFilePosixPermissions", "NSFilePosixPermissions"),
