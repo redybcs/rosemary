@@ -315,7 +315,8 @@ impl Encoder {
     ) -> bool {
         // A set whose slots are as the last draw with this pipeline left them
         // is already bound or pushed with what this one needs.
-        let stale = if std::ptr::eq(self.resolved, layouts) {
+        let resolved = std::ptr::eq(self.resolved, layouts);
+        let stale = if resolved {
             layouts.reads.map(|reads| reads.intersects(&self.dirty))
         } else {
             [true; SETS]
@@ -326,7 +327,7 @@ impl Encoder {
         // Until every stale set is bound, the bind point holds no pipeline's
         // resources in full.
         self.resolved = std::ptr::null();
-        let used = self.collect_writes(resources, inline_samplers, layouts, &stale);
+        let used = self.collect_writes(resources, inline_samplers, layouts, &stale, resolved);
         let push_compatible = self.bound[bind_point_slot(bind_point)].layouts == layouts.sets;
         let Some(sets) = self.materialize_sets(&layouts.sets, &used, &stale, layouts.push_set)
         else {
@@ -363,163 +364,34 @@ impl Encoder {
     /// paired null image still supplies the defined zero result. Without the
     /// feature, retain the old skip fallback until reflection carries enough
     /// descriptor shape to create matching placeholder images.
+    ///
+    /// `resolved` says these are the layouts the bind point last held in
+    /// full. A stale set is then its last entries with the dirty slots' ones
+    /// rewritten, rather than every entry gathered again.
     fn collect_writes(
         &mut self,
         resources: &[metal_translate::ResourceBinding],
         inline_samplers: &[vk::Sampler],
         layouts: &Layouts,
         stale: &[bool; SETS],
+        resolved: bool,
     ) -> [bool; SETS] {
-        let gpu = self.command().gpu;
-        let (null_descriptors, null_sampler) = (gpu.null_descriptors, gpu.null_sampler);
-        let mut used = [false; SETS];
-        for (wanted, _) in self
-            .wanted
-            .iter_mut()
-            .zip(stale)
-            .filter(|(_, stale)| **stale)
-        {
-            wanted.clear();
-        }
         debug_assert_eq!(resources.len(), inline_samplers.len());
-        for (binding, inline_sampler) in resources.iter().zip(inline_samplers) {
-            let set = binding.descriptor_set as usize;
-            if set >= SETS {
-                // Rejected by `layouts_for`, so not reachable through a
-                // pipeline which exists.
-                continue;
+        let mut used = [false; SETS];
+        for binding in resources {
+            // A set past the last is rejected by `layouts_for`, so not
+            // reachable through a pipeline which exists.
+            if let Some(used) = used.get_mut(binding.descriptor_set as usize) {
+                *used = true;
             }
-            used[set] = true;
-            if !stale[set] {
-                continue;
+        }
+        for set in (0..SETS).filter(|set| stale[*set]) {
+            if !(used[set]
+                && resolved
+                && self.rewrite_dirty_entries(set, resources, inline_samplers, layouts))
+            {
+                self.gather_entries(set, resources, inline_samplers, layouts);
             }
-            let slot = stage_slot(binding.stage);
-            let index = binding.metal_index as usize;
-            let Some(kind) = binding_type(binding, layouts) else {
-                continue;
-            };
-            let dynamic = kind == vk::DescriptorType::STORAGE_BUFFER_DYNAMIC;
-            let mut dynamic_offset = 0;
-            let (handle, offset, range) = match binding.kind {
-                ResourceKind::Buffer => {
-                    let bound = self.buffers[slot].get(index).copied().unwrap_or_default();
-                    if bound.buffer == vk::Buffer::null() {
-                        let what = if index < SLOTS {
-                            "has no buffer bound to it"
-                        } else {
-                            "is past the Metal buffer index this encoder tracks"
-                        };
-                        unbound(binding, what, null_descriptors);
-                        if !null_descriptors {
-                            continue;
-                        }
-                    }
-                    use vk::Handle;
-                    if bound.buffer == vk::Buffer::null() {
-                        (bound.buffer.as_raw(), 0, vk::WHOLE_SIZE)
-                    } else if dynamic && bound.uploaded {
-                        // The chunk from its start, moved to the copy by the
-                        // dynamic offset: the descriptor is then the same for
-                        // every copy in the chunk.
-                        dynamic_offset = bound.offset as u32;
-                        (bound.buffer.as_raw(), 0, bound.range)
-                    } else {
-                        (
-                            bound.buffer.as_raw(),
-                            bound.offset.min(bound.end),
-                            bound.range,
-                        )
-                    }
-                }
-                ResourceKind::Texture => {
-                    let bound = self.textures[slot]
-                        .get(index)
-                        .copied()
-                        .unwrap_or(std::ptr::null_mut());
-                    if bound.is_null() {
-                        let what = if index < SLOTS {
-                            "has no texture bound to it"
-                        } else {
-                            "is past the Metal texture index this encoder tracks"
-                        };
-                        unbound(binding, what, null_descriptors);
-                        if !null_descriptors {
-                            continue;
-                        }
-                        (0, 0, 0)
-                    } else {
-                        // SAFETY: only a texture of this crate's is ever bound.
-                        let texture = unsafe { object::body_ref::<Texture>(bound) };
-                        use vk::Handle;
-                        let is_texel_buffer = texture.texel_view != vk::BufferView::null();
-                        if is_texel_buffer != binding.texel_buffer {
-                            let what = match binding.texel_buffer {
-                                true => "is a texture_buffer bound to a texture with an image",
-                                false => "is a texture bound to a texture buffer",
-                            };
-                            unbound(binding, what, null_descriptors);
-                            if !null_descriptors {
-                                continue;
-                            }
-                            (0, 0, 0)
-                        } else if is_texel_buffer {
-                            (texture.texel_view.as_raw(), 0, 0)
-                        } else {
-                            (texture.image.view.as_raw(), 0, 0)
-                        }
-                    }
-                }
-                ResourceKind::Sampler if binding.inline_sampler.is_some() => {
-                    let made = *inline_sampler;
-                    use vk::Handle;
-                    if made == vk::Sampler::null() {
-                        unbound(
-                            binding,
-                            "is a constexpr sampler the device cannot make",
-                            null_descriptors,
-                        );
-                        if !null_descriptors {
-                            continue;
-                        }
-                        (null_sampler.as_raw(), 0, 0)
-                    } else {
-                        (made.as_raw(), 0, 0)
-                    }
-                }
-                ResourceKind::Sampler => {
-                    let bound = self.samplers[slot]
-                        .get(index)
-                        .copied()
-                        .unwrap_or(std::ptr::null_mut());
-                    if bound.is_null() {
-                        let what = if index < SLOTS {
-                            "has no sampler bound to it"
-                        } else {
-                            "is past the Metal sampler index this encoder tracks"
-                        };
-                        unbound(binding, what, null_descriptors);
-                        if !null_descriptors {
-                            continue;
-                        }
-                        use vk::Handle;
-                        (null_sampler.as_raw(), 0, 0)
-                    } else {
-                        // SAFETY: only a sampler state of this crate's is bound.
-                        let sampler = unsafe { object::body::<SamplerState>(bound) };
-                        use vk::Handle;
-                        (sampler.sampler.as_raw(), 0, 0)
-                    }
-                }
-                _ => continue,
-            };
-            self.wanted[set].push(DescriptorEntry {
-                binding: binding.binding,
-                kind,
-                handle,
-                offset,
-                range,
-                dynamic_offset,
-            });
         }
         if stale[BUFFER_SET] {
             // One offset per dynamic binding of the layout, in binding order,
@@ -535,6 +407,211 @@ impl Encoder {
             }
         }
         used
+    }
+
+    /// Every entry of `set`, gathered from the bindings as they stand.
+    fn gather_entries(
+        &mut self,
+        set: usize,
+        resources: &[metal_translate::ResourceBinding],
+        inline_samplers: &[vk::Sampler],
+        layouts: &Layouts,
+    ) {
+        let mut wanted = std::mem::take(&mut self.wanted[set]);
+        wanted.clear();
+        for (at, (binding, inline_sampler)) in resources.iter().zip(inline_samplers).enumerate() {
+            if binding.descriptor_set as usize != set {
+                continue;
+            }
+            if let Some(entry) = self.entry_for(at, binding, *inline_sampler, layouts) {
+                wanted.push(entry);
+            }
+        }
+        self.wanted[set] = wanted;
+    }
+
+    /// `set`'s entries as it last held them, with those of the slots set since
+    /// rewritten. `false`, with nothing to rely on in `wanted`, where a slot's
+    /// entry would appear or go - a binding left out without robustness2 -
+    /// which changes the set's shape: the caller gathers it whole.
+    fn rewrite_dirty_entries(
+        &mut self,
+        set: usize,
+        resources: &[metal_translate::ResourceBinding],
+        inline_samplers: &[vk::Sampler],
+        layouts: &Layouts,
+    ) -> bool {
+        let mut wanted = std::mem::take(&mut self.wanted[set]);
+        wanted.clear();
+        wanted.extend_from_slice(&self.set_cache[set].entries);
+        let mut whole = true;
+        for (at, (binding, inline_sampler)) in resources.iter().zip(inline_samplers).enumerate() {
+            if binding.descriptor_set as usize != set {
+                continue;
+            }
+            let Some(table) = slot_table(binding) else {
+                // A `constexpr sampler`, made with the pipeline: never set.
+                continue;
+            };
+            if !self.dirty.contains(
+                table,
+                stage_slot(binding.stage),
+                binding.metal_index as usize,
+            ) {
+                continue;
+            }
+            let entry = self.entry_for(at, binding, *inline_sampler, layouts);
+            let position = wanted.iter().position(|old| old.source == at as u32);
+            match (entry, position) {
+                (Some(entry), Some(position)) => wanted[position] = entry,
+                (None, None) => {}
+                _ => {
+                    whole = false;
+                    break;
+                }
+            }
+        }
+        self.wanted[set] = wanted;
+        whole
+    }
+
+    /// The entry the resource at `at` of the pipeline's list wants, or none
+    /// where a binding without robustness2 is left out.
+    fn entry_for(
+        &self,
+        at: usize,
+        binding: &metal_translate::ResourceBinding,
+        inline_sampler: vk::Sampler,
+        layouts: &Layouts,
+    ) -> Option<DescriptorEntry> {
+        let gpu = self.command().gpu;
+        let (null_descriptors, null_sampler) = (gpu.null_descriptors, gpu.null_sampler);
+        let slot = stage_slot(binding.stage);
+        let index = binding.metal_index as usize;
+        let kind = binding_type(binding, layouts)?;
+        let dynamic = kind == vk::DescriptorType::STORAGE_BUFFER_DYNAMIC;
+        let mut dynamic_offset = 0;
+        let (handle, offset, range) = match binding.kind {
+            ResourceKind::Buffer => {
+                let bound = self.buffers[slot].get(index).copied().unwrap_or_default();
+                if bound.buffer == vk::Buffer::null() {
+                    let what = if index < SLOTS {
+                        "has no buffer bound to it"
+                    } else {
+                        "is past the Metal buffer index this encoder tracks"
+                    };
+                    unbound(binding, what, null_descriptors);
+                    if !null_descriptors {
+                        return None;
+                    }
+                }
+                use vk::Handle;
+                if bound.buffer == vk::Buffer::null() {
+                    (bound.buffer.as_raw(), 0, vk::WHOLE_SIZE)
+                } else if dynamic && bound.uploaded {
+                    // The chunk from its start, moved to the copy by the
+                    // dynamic offset: the descriptor is then the same for
+                    // every copy in the chunk.
+                    dynamic_offset = bound.offset as u32;
+                    (bound.buffer.as_raw(), 0, bound.range)
+                } else {
+                    (
+                        bound.buffer.as_raw(),
+                        bound.offset.min(bound.end),
+                        bound.range,
+                    )
+                }
+            }
+            ResourceKind::Texture => {
+                let bound = self.textures[slot]
+                    .get(index)
+                    .copied()
+                    .unwrap_or(std::ptr::null_mut());
+                if bound.is_null() {
+                    let what = if index < SLOTS {
+                        "has no texture bound to it"
+                    } else {
+                        "is past the Metal texture index this encoder tracks"
+                    };
+                    unbound(binding, what, null_descriptors);
+                    if !null_descriptors {
+                        return None;
+                    }
+                    (0, 0, 0)
+                } else {
+                    // SAFETY: only a texture of this crate's is ever bound.
+                    let texture = unsafe { object::body_ref::<Texture>(bound) };
+                    use vk::Handle;
+                    let is_texel_buffer = texture.texel_view != vk::BufferView::null();
+                    if is_texel_buffer != binding.texel_buffer {
+                        let what = match binding.texel_buffer {
+                            true => "is a texture_buffer bound to a texture with an image",
+                            false => "is a texture bound to a texture buffer",
+                        };
+                        unbound(binding, what, null_descriptors);
+                        if !null_descriptors {
+                            return None;
+                        }
+                        (0, 0, 0)
+                    } else if is_texel_buffer {
+                        (texture.texel_view.as_raw(), 0, 0)
+                    } else {
+                        (texture.image.view.as_raw(), 0, 0)
+                    }
+                }
+            }
+            ResourceKind::Sampler if binding.inline_sampler.is_some() => {
+                let made = inline_sampler;
+                use vk::Handle;
+                if made == vk::Sampler::null() {
+                    unbound(
+                        binding,
+                        "is a constexpr sampler the device cannot make",
+                        null_descriptors,
+                    );
+                    if !null_descriptors {
+                        return None;
+                    }
+                    (null_sampler.as_raw(), 0, 0)
+                } else {
+                    (made.as_raw(), 0, 0)
+                }
+            }
+            ResourceKind::Sampler => {
+                let bound = self.samplers[slot]
+                    .get(index)
+                    .copied()
+                    .unwrap_or(std::ptr::null_mut());
+                if bound.is_null() {
+                    let what = if index < SLOTS {
+                        "has no sampler bound to it"
+                    } else {
+                        "is past the Metal sampler index this encoder tracks"
+                    };
+                    unbound(binding, what, null_descriptors);
+                    if !null_descriptors {
+                        return None;
+                    }
+                    use vk::Handle;
+                    (null_sampler.as_raw(), 0, 0)
+                } else {
+                    // SAFETY: only a sampler state of this crate's is bound.
+                    let sampler = unsafe { object::body::<SamplerState>(bound) };
+                    use vk::Handle;
+                    (sampler.sampler.as_raw(), 0, 0)
+                }
+            }
+            _ => return None,
+        };
+        Some(DescriptorEntry {
+            binding: binding.binding,
+            kind,
+            handle,
+            offset,
+            range,
+            dynamic_offset,
+            source: at as u32,
+        })
     }
 
     /// Allocate or reuse a descriptor set per used set index, writing it only
@@ -566,6 +643,9 @@ impl Encoder {
                 && cache.entries == self.wanted[index]
             {
                 sets[index] = cache.set;
+                // Equal as descriptors, but the new entries carry the dynamic
+                // offsets the next draw's rewrite starts from.
+                std::mem::swap(&mut cache.entries, &mut self.wanted[index]);
                 continue;
             }
             if let Some(set) = command.written_set(layouts[index], &self.wanted[index]) {
@@ -681,6 +761,9 @@ impl Encoder {
         // nothing disturbed it and the last write here was a push.
         let live = compatible && cache.layout == layout && cache.set == vk::DescriptorSet::null();
         if live && cache.entries == *entries {
+            // As for a bound set: keep the entries with the newest offsets.
+            let cache = &mut self.set_cache[index];
+            std::mem::swap(&mut cache.entries, &mut self.wanted[index]);
             return;
         }
         let incremental = live

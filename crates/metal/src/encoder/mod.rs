@@ -51,7 +51,7 @@ use crate::gpu::{
 use crate::object::{self, methods};
 use crate::pipeline::{
     BUFFER_SET, ComputePipeline, DepthStencilKey, Layouts, RenderDynamicState, RenderPipeline,
-    RenderVariantKey, SETS, STAGES, SlotSet, Table, binding_type, stage_slot,
+    RenderVariantKey, SETS, STAGES, SlotSet, Table, binding_type, slot_table, stage_slot,
 };
 use crate::resource::{Buffer, DepthStencilState, SamplerState, Texture};
 use crate::stats::{self, Counter};
@@ -110,6 +110,10 @@ struct DescriptorEntry {
     /// For a dynamic buffer, the offset handed over when the set is bound.
     /// Not part of the descriptor, so not part of the comparison.
     dynamic_offset: u32,
+    /// The position in its pipeline's resource list of the binding this was
+    /// gathered for, so that a draw rewriting one slot finds its entry. Not
+    /// part of the descriptor either: another pipeline may share the set.
+    source: u32,
 }
 
 impl PartialEq for DescriptorEntry {
@@ -1186,6 +1190,7 @@ mod scratch_tests {
             offset: 0,
             range: 0,
             dynamic_offset: 0,
+            source: 0,
         });
         scratch.cached_entries[1].push(DescriptorEntry {
             binding: 0,
@@ -1194,6 +1199,7 @@ mod scratch_tests {
             offset: 0,
             range: 0,
             dynamic_offset: 0,
+            source: 0,
         });
         scratch.dynamic_offsets.push(64);
         scratch.bound_offsets[0].push(128);
@@ -1233,6 +1239,7 @@ mod written_sets_tests {
             offset: 0,
             range: vk::WHOLE_SIZE,
             dynamic_offset: 0,
+            source: 0,
         }]
     }
 

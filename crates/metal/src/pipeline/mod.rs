@@ -88,6 +88,10 @@ impl SlotSet {
         }
     }
 
+    pub(crate) fn contains(&self, table: Table, stage: usize, index: usize) -> bool {
+        index < Self::CAPACITY && self.slots[table as usize][stage] & (1 << index) != 0
+    }
+
     pub(crate) fn intersects(&self, other: &Self) -> bool {
         self.slots
             .as_flattened()
@@ -97,16 +101,23 @@ impl SlotSet {
     }
 }
 
+/// The table a resource is read from, or none for a `constexpr sampler`.
+pub(crate) fn slot_table(binding: &ResourceBinding) -> Option<Table> {
+    match binding.kind {
+        ResourceKind::Buffer => Some(Table::Buffers),
+        ResourceKind::Texture => Some(Table::Textures),
+        ResourceKind::Sampler if binding.inline_sampler.is_none() => Some(Table::Samplers),
+        _ => None,
+    }
+}
+
 /// The binding slots the resources of each descriptor set are read from. A
 /// `constexpr sampler` is made with the pipeline and reads none.
 fn slot_reads(resources: &[&[ResourceBinding]]) -> [SlotSet; SETS] {
     let mut reads = [SlotSet::default(); SETS];
     for binding in resources.iter().copied().flatten() {
-        let table = match binding.kind {
-            ResourceKind::Buffer => Table::Buffers,
-            ResourceKind::Texture => Table::Textures,
-            ResourceKind::Sampler if binding.inline_sampler.is_none() => Table::Samplers,
-            _ => continue,
+        let Some(table) = slot_table(binding) else {
+            continue;
         };
         if let Some(set) = reads.get_mut(binding.descriptor_set as usize) {
             set.insert(

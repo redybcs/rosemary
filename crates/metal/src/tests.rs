@@ -5737,6 +5737,90 @@ fn check_dispatches_follow_single_binding_changes(device: Id) {
     }
 }
 
+/// What encoding a dispatch costs on the CPU for a kernel reading eight
+/// buffers and eight textures, when one texture changes between dispatches,
+/// when the guest sets every binding again unchanged, and when one buffer's
+/// offset moves. Run alone, as it shares the process's device: with
+/// `ROSEMARY_TEST_VULKAN=1 cargo test --release -p metal --lib --
+/// --ignored --exact --nocapture tests::binding_change_encode_cost`.
+#[test]
+#[ignore = "a benchmark, not a check"]
+fn binding_change_encode_cost() {
+    let Some(device) = gpu_device() else {
+        return;
+    };
+    const WIDE: u64 = 8;
+    const DISPATCHES: usize = 4000;
+    let parameters: Vec<String> = (1..WIDE)
+        .map(|at| format!("device const uint* b{at} [[buffer({at})]]"))
+        .chain((0..WIDE).map(|at| format!("texture2d<uint> t{at} [[texture({at})]]")))
+        .collect();
+    let sum: Vec<String> = (1..WIDE)
+        .map(|at| format!("b{at}[0]"))
+        .chain((0..WIDE).map(|at| format!("t{at}.read(uint2(0, 0)).x")))
+        .collect();
+    let source = format!(
+        "kernel void wide(device uint* output [[buffer(0)]], {}) {{ output[0] = {}; }}",
+        parameters.join(", "),
+        sum.join(" + ")
+    );
+    let kernel = kernel_from_source(device, &source, "wide");
+    // SAFETY: objects this test made, sent the selectors they implement.
+    unsafe {
+        let textures: Vec<Id> = (0..WIDE + 1)
+            .map(|_| readable_texture(device, TEXTURE_TYPE_2D, PIXEL_FORMAT_R32_UINT, [1, 1, 1]))
+            .collect();
+        let buffers: Vec<Id> = (0..WIDE)
+            .map(|_| new_buffer(device, std::ptr::null(), 1 << 16, 0))
+            .collect();
+        let queue = new_command_queue(device, std::ptr::null());
+        for (name, step) in [
+            ("one texture changes", 0),
+            ("every binding set again", 1),
+            ("one buffer offset moves", 2),
+        ] {
+            let command = send(queue, "commandBuffer");
+            let encoder = send(command, "computeCommandEncoder");
+            let (bind_texture, bind_sel) =
+                method::<unsafe extern "C" fn(Id, Sel, Id, u64)>(encoder, "setTexture:atIndex:");
+            send_with_object(encoder, "setComputePipelineState:", kernel);
+            let bind_all = || {
+                for at in 0..WIDE {
+                    set_buffer_at(encoder, buffers[at as usize], 0, at);
+                    bind_texture(encoder, bind_sel, textures[at as usize], at);
+                }
+            };
+            bind_all();
+            let start = std::time::Instant::now();
+            for dispatched in 0..DISPATCHES {
+                match step {
+                    0 => bind_texture(
+                        encoder,
+                        bind_sel,
+                        textures[if dispatched % 2 == 0 {
+                            WIDE as usize
+                        } else {
+                            0
+                        }],
+                        0,
+                    ),
+                    1 => bind_all(),
+                    _ => set_buffer_at(encoder, buffers[1], (dispatched as u64 % 1024) * 16, 1),
+                }
+                dispatch(encoder, 1);
+            }
+            send_void(encoder, "endEncoding");
+            let elapsed = start.elapsed();
+            send_void(command, "commit");
+            send_void(command, "waitUntilCompleted");
+            eprintln!(
+                "{name}: {:.0} ns per dispatch",
+                elapsed.as_nanos() as f64 / DISPATCHES as f64
+            );
+        }
+    }
+}
+
 /// A dispatch which follows a change to one binding, to the pipeline, or to
 /// nothing reads every binding as it was last set.
 #[test]
