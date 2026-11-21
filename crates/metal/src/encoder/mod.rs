@@ -512,6 +512,18 @@ pub(crate) struct DescriptorScratch {
     pub buffer_infos: Vec<vk::DescriptorBufferInfo>,
     pub image_infos: Vec<vk::DescriptorImageInfo>,
     pub texel_views: Vec<vk::BufferView>,
+    /// Always empty between updates; see [`recycle_writes`].
+    pub writes: Vec<vk::WriteDescriptorSet<'static>>,
+}
+
+/// The same allocation, emptied, for writes that borrow other infos.
+pub(crate) fn recycle_writes<'to>(
+    mut writes: Vec<vk::WriteDescriptorSet<'_>>,
+) -> Vec<vk::WriteDescriptorSet<'to>> {
+    writes.clear();
+    let mut writes = std::mem::ManuallyDrop::new(writes);
+    // SAFETY: the vector is empty and the two types differ only in lifetime.
+    unsafe { Vec::from_raw_parts(writes.as_mut_ptr().cast(), 0, writes.capacity()) }
 }
 
 impl DescriptorScratch {

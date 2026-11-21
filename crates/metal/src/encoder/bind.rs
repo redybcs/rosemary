@@ -670,6 +670,7 @@ impl Encoder {
                 buffer_infos,
                 image_infos,
                 texel_views,
+                writes: spare_writes,
             } = &mut scratch;
             for index in (0..SETS).filter(|index| fresh[*index]) {
                 for entry in &self.set_cache[index].entries {
@@ -699,7 +700,7 @@ impl Encoder {
                 }
             }
             let (mut next_buffer, mut next_image, mut next_texel) = (0, 0, 0);
-            let mut writes = Vec::with_capacity(buffer_infos.len() + image_infos.len());
+            let mut writes = super::recycle_writes(std::mem::take(spare_writes));
             for index in (0..SETS).filter(|index| fresh[*index]) {
                 for entry in &self.set_cache[index].entries {
                     let write = vk::WriteDescriptorSet::default()
@@ -734,7 +735,7 @@ impl Encoder {
             for index in (0..SETS).filter(|index| fresh[*index]) {
                 command.remember_set(layouts[index], &self.set_cache[index].entries, sets[index]);
             }
-            drop(writes);
+            scratch.writes = super::recycle_writes(writes);
             self.descriptor_scratch = scratch;
         }
         Some(sets)
@@ -786,6 +787,7 @@ impl Encoder {
             buffer_infos,
             image_infos,
             texel_views,
+            writes: spare_writes,
         } = &mut scratch;
         for entry in changed.clone() {
             use vk::Handle;
@@ -811,7 +813,7 @@ impl Encoder {
             }
         }
         let (mut next_buffer, mut next_image, mut next_texel) = (0, 0, 0);
-        let mut writes = Vec::with_capacity(buffer_infos.len() + image_infos.len());
+        let mut writes = super::recycle_writes(std::mem::take(spare_writes));
         for entry in changed {
             let write = vk::WriteDescriptorSet::default()
                 .dst_binding(entry.binding)
@@ -849,7 +851,7 @@ impl Encoder {
             )
         };
         stats::add(Counter::PushDescriptorWrites, writes.len() as u64);
-        drop(writes);
+        scratch.writes = super::recycle_writes(writes);
         self.descriptor_scratch = scratch;
         let cache = &mut self.set_cache[index];
         cache.layout = layout;
