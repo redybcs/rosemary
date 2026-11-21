@@ -919,7 +919,7 @@ pub(crate) fn install() {
         "setBlendColorRed:green:blue:alpha:" => set_blend_color, c"v32@0:8f16f20f24f28";
         "dispatchThreadgroups:threadsPerThreadgroup:" => dispatch_threadgroups,
             c"v64@0:8{MTLSize=QQQ}16{MTLSize=QQQ}40";
-        "dispatchThreads:threadsPerThreadgroup:" => dispatch_threadgroups,
+        "dispatchThreads:threadsPerThreadgroup:" => dispatch_threads,
             c"v64@0:8{MTLSize=QQQ}16{MTLSize=QQQ}40";
         "drawPrimitives:vertexStart:vertexCount:instanceCount:" => draw_primitives,
             c"v48@0:8Q16Q24Q32Q40";

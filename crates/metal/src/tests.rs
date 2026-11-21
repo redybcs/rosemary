@@ -5421,6 +5421,53 @@ fn a_switch_falls_through_from_its_label_until_a_break() {
     assert_eq!(trails, [1212, 22, 9595, 9595, 395395, 55, 9595]);
 }
 
+/// `-dispatchThreads:` counts threads and rounds up to whole threadgroups;
+/// `-dispatchThreadgroups:` counts the groups themselves.
+#[test]
+fn dispatch_threads_rounds_up_to_whole_threadgroups() {
+    isolate_metal_fixture!();
+    let Some(device) = gpu_device() else {
+        return;
+    };
+    const SOURCE: &str = "kernel void mark(device uint* out [[buffer(0)]], \
+        uint group [[threadgroup_position_in_grid]]) { out[group] = 1; }";
+    const SLOTS: usize = 16;
+    let pipeline = kernel_from_source(device, SOURCE, "mark");
+    let size = |width| encoder::MtlSize {
+        width,
+        height: 1,
+        depth: 1,
+    };
+    let mut marked = Vec::new();
+    for selector in [
+        "dispatchThreads:threadsPerThreadgroup:",
+        "dispatchThreadgroups:threadsPerThreadgroup:",
+    ] {
+        let out = buffer_with_bytes(device, &[0; SLOTS * 4]);
+        // SAFETY: objects this test made, sent the selectors they implement.
+        unsafe {
+            let queue = new_command_queue(device, std::ptr::null());
+            let command = send(queue, "commandBuffer");
+            let encoder = send(command, "computeCommandEncoder");
+            send_with_object(encoder, "setComputePipelineState:", pipeline);
+            set_buffer_at(encoder, out, 0, 0);
+            let sel = objc::sel::get(selector);
+            let method = objc::object::class_of(encoder)
+                .and_then(|class| class.method(sel))
+                .expect("the selector is registered");
+            let call: unsafe extern "C" fn(Id, Sel, encoder::MtlSize, encoder::MtlSize) =
+                std::mem::transmute(method.implementation());
+            call(encoder, sel, size(10), size(4));
+            send_void(encoder, "endEncoding");
+            send_void(command, "commit");
+            send_void(command, "waitUntilCompleted");
+        }
+        let words = buffer_bytes(out, SLOTS * 4);
+        marked.push(words.chunks(4).filter(|word| word[0] == 1).count());
+    }
+    assert_eq!(marked, [3, 10]);
+}
+
 /// `MTLPixelFormat`.
 const PIXEL_FORMAT_R32_UINT: u64 = 53;
 const PIXEL_FORMAT_RGBA8_UNORM: u64 = 70;

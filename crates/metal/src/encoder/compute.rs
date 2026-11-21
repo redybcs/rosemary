@@ -1,11 +1,36 @@
 use super::*;
 
+/// What a dispatch's grid size counts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Grid {
+    Threadgroups,
+    /// Metal rounds the thread count up to whole threadgroups.
+    Threads,
+}
+
 pub(super) unsafe extern "C" fn dispatch_threadgroups(
     receiver: Id,
-    sel: Sel,
+    _sel: Sel,
     groups: MtlSize,
     per_group: MtlSize,
 ) {
+    // SAFETY: the runtime sends this only to encoders of this crate's.
+    unsafe { dispatch(receiver, groups, per_group, Grid::Threadgroups) };
+}
+
+pub(super) unsafe extern "C" fn dispatch_threads(
+    receiver: Id,
+    _sel: Sel,
+    threads: MtlSize,
+    per_group: MtlSize,
+) {
+    // SAFETY: the runtime sends this only to encoders of this crate's.
+    unsafe { dispatch(receiver, threads, per_group, Grid::Threads) };
+}
+
+/// # Safety
+/// `receiver` is an encoder of this crate's.
+unsafe fn dispatch(receiver: Id, extent: MtlSize, per_group: MtlSize, grid: Grid) {
     // SAFETY: an encoder of this crate's.
     let encoder = unsafe { object::body::<Encoder>(receiver) };
     if encoder.kind != Kind::Compute || encoder.compute_pipeline.is_null() {
@@ -34,22 +59,17 @@ pub(super) unsafe extern "C" fn dispatch_threadgroups(
             }
         },
     };
-    // `-dispatchThreads:` counts threads; `-dispatchThreadgroups:` counts
-    // groups. Metal rounds the thread form up to whole threadgroups.
-    // SAFETY: a selector the runtime owns.
-    let threads = unsafe { std::ffi::CStr::from_ptr(sel) }.to_bytes()
-        == b"dispatchThreads:threadsPerThreadgroup:";
-    let counts = if threads {
+    let counts = if grid == Grid::Threads {
         [
-            (groups.width.div_ceil(per_group.width.max(1))) as u32,
-            (groups.height.div_ceil(per_group.height.max(1))) as u32,
-            (groups.depth.div_ceil(per_group.depth.max(1))) as u32,
+            (extent.width.div_ceil(per_group.width.max(1))) as u32,
+            (extent.height.div_ceil(per_group.height.max(1))) as u32,
+            (extent.depth.div_ceil(per_group.depth.max(1))) as u32,
         ]
     } else {
         [
-            groups.width as u32,
-            groups.height as u32,
-            groups.depth as u32,
+            extent.width as u32,
+            extent.height as u32,
+            extent.depth as u32,
         ]
     };
     encoder.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
