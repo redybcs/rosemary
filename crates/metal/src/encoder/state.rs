@@ -44,7 +44,6 @@ pub(super) unsafe extern "C" fn set_buffer<const STAGE: usize>(
 ) {
     // SAFETY: an encoder of this crate's.
     let encoder = unsafe { object::body::<Encoder>(receiver) };
-    encoder.dirty.insert(Table::Buffers, STAGE, index as usize);
     let Some(slot) = encoder.buffers[STAGE].get_mut(index as usize) else {
         // Metal retains what an encoder binds, and a guest is entitled to
         // release its own reference the moment the call returns. The command
@@ -54,11 +53,16 @@ pub(super) unsafe extern "C" fn set_buffer<const STAGE: usize>(
     };
     // A guest rebinds the same buffer at a new offset far more often than it
     // binds another; the command buffer retained it when it was first bound.
+    // Set again exactly as it was, it changes no descriptor.
     if slot.object == buffer && !buffer.is_null() {
-        slot.offset = offset;
-        slot.uploaded = false;
+        if slot.offset != offset || slot.uploaded {
+            slot.offset = offset;
+            slot.uploaded = false;
+            encoder.dirty.insert(Table::Buffers, STAGE, index as usize);
+        }
         return;
     }
+    encoder.dirty.insert(Table::Buffers, STAGE, index as usize);
     *slot = if buffer.is_null() {
         BufferBinding::default()
     } else {
@@ -129,8 +133,11 @@ pub(super) unsafe extern "C" fn set_buffer_offset<const STAGE: usize>(
 ) {
     // SAFETY: an encoder of this crate's.
     let encoder = unsafe { object::body::<Encoder>(receiver) };
-    encoder.dirty.insert(Table::Buffers, STAGE, index as usize);
     if let Some(slot) = encoder.buffers[STAGE].get_mut(index as usize) {
+        if slot.offset == offset && !slot.uploaded {
+            return;
+        }
+        encoder.dirty.insert(Table::Buffers, STAGE, index as usize);
         slot.offset = offset;
         // Metal allows this only on a buffer set with `-setBuffer:`. On a
         // `-setBytes:` copy it would move a dynamic offset past the bytes the
