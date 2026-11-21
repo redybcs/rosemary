@@ -463,7 +463,7 @@ impl Class {
         assert!(
             self.is_registered()
                 && size >= 2 * size_of::<usize>()
-                && size % size_of::<usize>() == 0,
+                && size.is_multiple_of(size_of::<usize>()),
             "{} cannot keep its count in its instances",
             self.name_str()
         );
