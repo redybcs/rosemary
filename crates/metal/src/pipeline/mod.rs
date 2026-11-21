@@ -47,6 +47,9 @@ pub(crate) struct Layouts {
     pub dynamic: Vec<u32>,
     /// The binding slots each set's resources are read from.
     pub reads: [SlotSet; SETS],
+    /// Whether two of a set's resources share a binding - a buffer both
+    /// stages declare - where only writing every entry says which one wins.
+    pub repeats: [bool; SETS],
 }
 
 /// Metal's per-stage binding tables: compute, vertex and fragment.
@@ -209,6 +212,12 @@ pub(crate) fn layouts_for(gpu: &Gpu, resources: &[&[ResourceBinding]]) -> Result
             per_set[set].push((binding.binding, kind));
         }
     }
+    let repeats = per_set.each_ref().map(|bindings| {
+        bindings
+            .iter()
+            .enumerate()
+            .any(|(at, (binding, _))| bindings[..at].iter().any(|(other, _)| other == binding))
+    });
     let push_set = choose_push_set(
         per_set.each_ref().map(Vec::len),
         gpu.max_push_descriptors as usize,
@@ -234,6 +243,7 @@ pub(crate) fn layouts_for(gpu: &Gpu, resources: &[&[ResourceBinding]]) -> Result
         push_set,
         dynamic,
         reads: slot_reads(resources),
+        repeats,
     })
 }
 

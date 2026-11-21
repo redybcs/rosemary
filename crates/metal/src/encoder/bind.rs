@@ -202,16 +202,6 @@ pub(super) unsafe extern "C" fn end_encoding(receiver: Id, _sel: Sel) {
     }
 }
 
-/// Whether two entries write one binding - a buffer both stages declare -
-/// where only writing every entry, in order, says which one wins.
-fn repeats_a_binding(entries: &[DescriptorEntry]) -> bool {
-    entries.iter().enumerate().any(|(at, entry)| {
-        entries[..at]
-            .iter()
-            .any(|other| other.binding == entry.binding)
-    })
-}
-
 /// Report a resource the pipeline declares which nothing satisfies.
 ///
 /// The draw is still recorded: see [`Encoder::collect_writes`].
@@ -342,13 +332,7 @@ impl Encoder {
             .push_set
             .filter(|index| used[*index] && stale[*index])
         {
-            self.push_set(
-                index,
-                layouts.sets[index],
-                layouts.pipeline,
-                bind_point,
-                push_compatible,
-            );
+            self.push_set(index, layouts, bind_point, push_compatible);
         }
         self.resolved = layouts;
         self.dirty = SlotSet::default();
@@ -751,11 +735,11 @@ impl Encoder {
     fn push_set(
         &mut self,
         index: usize,
-        layout: vk::DescriptorSetLayout,
-        pipeline_layout: vk::PipelineLayout,
+        layouts: &Layouts,
         bind_point: vk::PipelineBindPoint,
         compatible: bool,
     ) {
+        let (layout, pipeline_layout) = (layouts.sets[index], layouts.pipeline);
         let cache = &self.set_cache[index];
         let entries = &self.wanted[index];
         // What the bind point already holds is the cached push, only where
@@ -774,7 +758,7 @@ impl Encoder {
                 .iter()
                 .zip(entries)
                 .all(|(old, new)| (old.binding, old.kind) == (new.binding, new.kind))
-            && !repeats_a_binding(entries);
+            && !layouts.repeats[index];
         let changed = entries
             .iter()
             .enumerate()
