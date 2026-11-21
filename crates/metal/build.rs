@@ -109,10 +109,10 @@ fn write_tables(hook: &Path, out: &Path) -> bool {
                 hook.display()
             );
             let halves: Vec<u8> = bytes
-                .chunks_exact(4)
-                .flat_map(|v| {
-                    half::f16::from_f32(f32::from_le_bytes(v.try_into().unwrap())).to_le_bytes()
-                })
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|v| half::f16::from_f32(f32::from_le_bytes(*v)).to_le_bytes())
                 .collect();
             tables.push((width, height, halves));
             in_texture = false;
