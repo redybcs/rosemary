@@ -362,11 +362,19 @@ impl<'a> Canvas<'a> {
 
     /// Fill `path` from `top` at `rect`'s top edge to `bottom` at its bottom
     /// edge, as [`Canvas::fill_vertical_gradient`] fills a rectangle.
-    pub fn fill_path_vertical_gradient(&mut self, path: &Path, rect: Rect, top: Color, bottom: Color) {
+    pub fn fill_path_vertical_gradient(
+        &mut self,
+        path: &Path,
+        rect: Rect,
+        top: Color,
+        bottom: Color,
+    ) {
         let s = self.scale;
         let (start, extent) = (rect.y * s, (rect.height * s).max(1.0));
         let device = self.device_segments(path);
-        self.fill_device(&device, |y| top.mix(bottom, (y as f32 + 0.5 - start) / extent));
+        self.fill_device(&device, |y| {
+            top.mix(bottom, (y as f32 + 0.5 - start) / extent)
+        });
     }
 
     fn device_segments(&self, path: &Path) -> Vec<Segment> {
@@ -491,7 +499,13 @@ impl<'a> Canvas<'a> {
     /// An emoji, in its own colours, with its baseline's left end at
     /// `origin`: painted at this canvas's pixels over the emoji face's own
     /// ascent and descent, then drawn there.
-    fn draw_color_glyph(&mut self, colored: &crate::text::ColorGlyph, glyph: &crate::text::Glyph, origin: Point, color: Color) {
+    fn draw_color_glyph(
+        &mut self,
+        colored: &crate::text::ColorGlyph,
+        glyph: &crate::text::Glyph,
+        origin: Point,
+        color: Color,
+    ) {
         let s = self.scale;
         let face = colored.face.face();
         let ascent = f32::from(face.ascender()) * glyph.scale;
@@ -504,11 +518,29 @@ impl<'a> Canvas<'a> {
         }
         // Font units, y up, to the image's pixels, y down.
         let units = glyph.scale * s;
-        let transform =
-            tiny_skia::Transform::from_row(units, 0.0, 0.0, -units, origin.x * s - left, origin.y * s - top);
+        let transform = tiny_skia::Transform::from_row(
+            units,
+            0.0,
+            0.0,
+            -units,
+            origin.x * s - left,
+            origin.y * s - top,
+        );
         let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let foreground = owned_ttf_parser::RgbaColor::new(byte(color.r), byte(color.g), byte(color.b), byte(color.a));
-        if let Some(image) = crate::color::paint(face, colored.glyph, width as u32, height as u32, transform, foreground) {
+        let foreground = owned_ttf_parser::RgbaColor::new(
+            byte(color.r),
+            byte(color.g),
+            byte(color.b),
+            byte(color.a),
+        );
+        if let Some(image) = crate::color::paint(
+            face,
+            colored.glyph,
+            width as u32,
+            height as u32,
+            transform,
+            foreground,
+        ) {
             self.draw_image(&image, Rect::new(left / s, top / s, width / s, height / s));
         }
     }
@@ -709,19 +741,32 @@ mod tests {
             return;
         };
         let flag = "\u{1F1E9}\u{1F1EA}";
-        if font.glyphs(flag, 26.0).iter().all(|glyph| glyph.color.is_none()) {
+        if font
+            .glyphs(flag, 26.0)
+            .iter()
+            .all(|glyph| glyph.color.is_none())
+        {
             return;
         }
         let (width, height) = (60, 40);
         let mut pixels = vec![0u8; width * height * 4];
         let mut canvas = Canvas::new(&mut pixels, width, height, width * 4, 1.0);
-        canvas.draw_text(flag, &font, 26.0, Point::new(2.0, 30.0), Color::rgb(0, 0, 0));
+        canvas.draw_text(
+            flag,
+            &font,
+            26.0,
+            Point::new(2.0, 30.0),
+            Color::rgb(0, 0, 0),
+        );
         // Germany's flag: red and gold among the pixels, not just the black
         // the text was asked for.
         let coloured = pixels
             .chunks(4)
             .filter(|p| p[3] > 200 && (i32::from(p[2]) - i32::from(p[0])).abs() > 80)
             .count();
-        assert!(coloured > 20, "the flag keeps its colours ({coloured} coloured pixels)");
+        assert!(
+            coloured > 20,
+            "the flag keeps its colours ({coloured} coloured pixels)"
+        );
     }
 }

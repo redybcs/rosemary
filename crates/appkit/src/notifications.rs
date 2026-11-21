@@ -40,7 +40,9 @@ impl Curve {
     /// How far along the motion is when `time` of it, from 0 to 1, has passed.
     fn at(self, time: f32) -> f32 {
         let Curve(x1, y1, x2, y2) = self;
-        let along = |t: f32, a: f32, b: f32| 3.0 * (1.0 - t) * (1.0 - t) * t * a + 3.0 * (1.0 - t) * t * t * b + t * t * t;
+        let along = |t: f32, a: f32, b: f32| {
+            3.0 * (1.0 - t) * (1.0 - t) * t * a + 3.0 * (1.0 - t) * t * t * b + t * t * t
+        };
         // x rises with t, so halving finds the t whose x is `time` to well
         // within a pixel in this many steps.
         let (mut low, mut high) = (0.0f32, 1.0f32);
@@ -134,7 +136,11 @@ pub(crate) fn step() {
             };
             static LISTENING: std::sync::Once = std::sync::Once::new();
             LISTENING.call_once(listen);
-            let Some((title, text)) = PENDING.lock().unwrap_or_else(|e| e.into_inner()).pop_front() else {
+            let Some((title, text)) = PENDING
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pop_front()
+            else {
                 return;
             };
             *showing = Some(Showing {
@@ -177,7 +183,11 @@ pub(crate) fn pointer(id: u32, x: f32, y: f32, clicked: bool) -> bool {
         };
         let on_window = crate::window::facts(current.window)
             .is_some_and(|facts| sdl3::video::window_id(facts.sdl as sdl3::Window) == id);
-        if !on_window || !current.card.is_some_and(|card| card.contains(chrome::Point::new(x, y))) {
+        if !on_window
+            || !current
+                .card
+                .is_some_and(|card| card.contains(chrome::Point::new(x, y)))
+        {
             return false;
         }
         if clicked && current.leaving.is_none() {
@@ -224,7 +234,8 @@ fn shown(started: Instant, leaving: Option<(Instant, f32)>, now: Instant) -> Opt
 fn send(receiver: Id, selector: &str) {
     // SAFETY: a selector that takes no arguments and returns nothing.
     unsafe {
-        let call: unsafe extern "C" fn(Id, objc::sel::Sel) = std::mem::transmute(objc::msg::entry());
+        let call: unsafe extern "C" fn(Id, objc::sel::Sel) =
+            std::mem::transmute(objc::msg::entry());
         call(receiver, objc::sel::get(selector));
     }
 }
@@ -322,8 +333,12 @@ impl Showing {
             }
         };
         // The content starts under the titlebar, when the window has one.
-        let titlebar = crate::decor::inset_for(crate::decor::config(), facts.titled, facts.panel, facts.fullscreen)
-            as f32;
+        let titlebar = crate::decor::inset_for(
+            crate::decor::config(),
+            facts.titled,
+            facts.panel,
+            facts.fullscreen,
+        ) as f32;
         self.card = Some(Rect::new(
             x + origin.x,
             titlebar + theme.banner_inset,
@@ -332,13 +347,22 @@ impl Showing {
         ));
 
         let scale = sdl3::video::window_pixel_density(facts.sdl as sdl3::Window).max(1.0);
-        let (width, height) = ((room.width * scale).ceil() as usize, (room.height * scale).ceil() as usize);
+        let (width, height) = (
+            (room.width * scale).ceil() as usize,
+            (room.height * scale).ceil() as usize,
+        );
         let painted = (width, height, theme.dark);
         if self.painted != Some(painted) {
             self.painted = Some(painted);
             let mut pixels = vec![0u8; width * height * 4];
-            let placed = self.banner.layout(Rect::new(origin.x, origin.y, 0.0, 0.0), theme);
-            self.banner.paint(&mut Canvas::new(&mut pixels, width, height, width * 4, scale), &placed, theme);
+            let placed = self
+                .banner
+                .layout(Rect::new(origin.x, origin.y, 0.0, 0.0), theme);
+            self.banner.paint(
+                &mut Canvas::new(&mut pixels, width, height, width * 4, scale),
+                &placed,
+                theme,
+            );
             crate::backing::set_overlay(
                 view,
                 crate::backing::Overlay {
@@ -384,11 +408,25 @@ mod tests {
         let hit = unsafe {
             let init: unsafe extern "C" fn(Id, objc::sel::Sel, NSRect) -> Id =
                 std::mem::transmute(objc::msg::entry());
-            let size = NSSize { width: 100.0, height: 50.0 };
-            init(view, objc::sel::get("initWithFrame:"), NSRect { origin: NSPoint { x: 0.0, y: 0.0 }, size });
+            let size = NSSize {
+                width: 100.0,
+                height: 50.0,
+            };
+            init(
+                view,
+                objc::sel::get("initWithFrame:"),
+                NSRect {
+                    origin: NSPoint { x: 0.0, y: 0.0 },
+                    size,
+                },
+            );
             let hit_test: unsafe extern "C" fn(Id, objc::sel::Sel, NSPoint) -> Id =
                 std::mem::transmute(objc::msg::entry());
-            hit_test(view, objc::sel::get("hitTest:"), NSPoint { x: 10.0, y: 10.0 })
+            hit_test(
+                view,
+                objc::sel::get("hitTest:"),
+                NSPoint { x: 10.0, y: 10.0 },
+            )
         };
         assert!(hit.is_null(), "the banner view takes no clicks of its own");
         objc::arc::release(view);

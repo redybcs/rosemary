@@ -369,7 +369,10 @@ unsafe fn close(unit: &Mutex<Unit>) {
     let (stream, capture) = {
         let mut unit = unit.lock().unwrap_or_else(|e| e.into_inner());
         let stream = stream::detach(&mut unit);
-        (stream, std::mem::replace(&mut unit.capture, std::ptr::null_mut()))
+        (
+            stream,
+            std::mem::replace(&mut unit.capture, std::ptr::null_mut()),
+        )
     };
     if !stream.is_null() {
         // SAFETY: taken out of the unit, with its lock released.

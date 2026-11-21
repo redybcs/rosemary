@@ -227,7 +227,11 @@ pub(crate) fn orphan(collection: Id) {
     // SAFETY: a collection of this crate's.
     let collection = unsafe { object::body::<IndexedCollection>(collection) };
     collection.owner = std::ptr::null_mut();
-    for element in collection.elements.iter().filter(|element| !element.is_null()) {
+    for element in collection
+        .elements
+        .iter()
+        .filter(|element| !element.is_null())
+    {
         (collection.orphan)(*element);
     }
 }

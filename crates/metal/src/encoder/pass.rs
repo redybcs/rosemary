@@ -2033,7 +2033,11 @@ mod tests {
             let second = collection.element(1).expect("attachment 1");
             assert_eq!(collection.element(1), Some(second));
             assert_eq!(
-                collection.elements.iter().filter(|element| !element.is_null()).count(),
+                collection
+                    .elements
+                    .iter()
+                    .filter(|element| !element.is_null())
+                    .count(),
                 1
             );
             set_attachment_number(second, objc::sel::get("setStoreAction:"), 0);

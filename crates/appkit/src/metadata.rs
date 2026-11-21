@@ -32,7 +32,10 @@ pub fn publish(executable: &Path) {
     // SDL's own `SDL_APP_NAME`, when the launcher sets it, names the app to
     // the sound server and the desktop over the bundle; the window title
     // above stays the guest's.
-    let name = std::env::var("SDL_APP_NAME").ok().filter(|n| !n.is_empty()).or(name);
+    let name = std::env::var("SDL_APP_NAME")
+        .ok()
+        .filter(|n| !n.is_empty())
+        .or(name);
     sdl3::set_app_metadata(&sdl3::AppMetadata {
         name,
         version: owned(bundle.and_then(|b| b.version())),

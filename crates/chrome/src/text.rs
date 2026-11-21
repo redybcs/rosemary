@@ -69,7 +69,11 @@ fn ligature(face: &owned_ttf_parser::Face<'_>, first: GlyphId, second: GlyphId) 
             let SubstitutionSubtable::Ligature(ligatures) = subtable else {
                 continue;
             };
-            let Some(set) = ligatures.coverage.get(first).and_then(|at| ligatures.ligature_sets.get(at)) else {
+            let Some(set) = ligatures
+                .coverage
+                .get(first)
+                .and_then(|at| ligatures.ligature_sets.get(at))
+            else {
                 continue;
             };
             if let Some(found) = set
@@ -229,10 +233,13 @@ impl Font {
                     .or_insert_with(|| Arc::new(fonts::outline(self.faces[face].face(), glyph.0)))
                     .clone()
             };
-            let color = self.faces[face].face().is_color_glyph(glyph).then(|| ColorGlyph {
-                face: self.faces[face].clone(),
-                glyph,
-            });
+            let color = self.faces[face]
+                .face()
+                .is_color_glyph(glyph)
+                .then(|| ColorGlyph {
+                    face: self.faces[face].clone(),
+                    glyph,
+                });
             out.push(Glyph {
                 outline,
                 scale,

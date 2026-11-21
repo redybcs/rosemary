@@ -351,7 +351,10 @@ fn paint(popup: sdl3::Window, pixels: &[u8], at: Option<(i32, i32)>) {
         .filter(|w| *w > 0);
     let scale = sdl3::video::x11_scale();
     sdl3::video::present_window(popup, |surface| {
-        let (w, h) = (surface.width.max(0) as usize, surface.height.max(0) as usize);
+        let (w, h) = (
+            surface.width.max(0) as usize,
+            surface.height.max(0) as usize,
+        );
         let length = surface.pitch as usize * h;
         // SAFETY: SDL reported `pitch` bytes per row for `height` rows, and
         // the surface is locked for the duration of this call.
@@ -396,7 +399,12 @@ fn resample(bitmap: &crate::raster::Bitmap, width: u32, height: u32) -> Vec<u8> 
         let i = (y.min(bh - 1) * bw + x.min(bw - 1)) * 4;
         let p = &bitmap.pixels[i..i + 4];
         let a = f32::from(p[3]) / 255.0;
-        [f32::from(p[0]) * a, f32::from(p[1]) * a, f32::from(p[2]) * a, f32::from(p[3])]
+        [
+            f32::from(p[0]) * a,
+            f32::from(p[1]) * a,
+            f32::from(p[2]) * a,
+            f32::from(p[3]),
+        ]
     };
     let mut out = vec![0u8; (width * height * 4) as usize];
     for y in 0..height as usize {
@@ -405,15 +413,25 @@ fn resample(bitmap: &crate::raster::Bitmap, width: u32, height: u32) -> Vec<u8> 
         for x in 0..width as usize {
             let sx = ((x as f32 + 0.5) * bw as f32 / width as f32 - 0.5).max(0.0);
             let (x0, fx) = (sx as usize, sx.fract());
-            let (a, b, c, d) = (at(x0, y0), at(x0 + 1, y0), at(x0, y0 + 1), at(x0 + 1, y0 + 1));
+            let (a, b, c, d) = (
+                at(x0, y0),
+                at(x0 + 1, y0),
+                at(x0, y0 + 1),
+                at(x0 + 1, y0 + 1),
+            );
             let mut p = [0f32; 4];
             for k in 0..4 {
-                p[k] = (a[k] * (1.0 - fx) + b[k] * fx) * (1.0 - fy) + (c[k] * (1.0 - fx) + d[k] * fx) * fy;
+                p[k] = (a[k] * (1.0 - fx) + b[k] * fx) * (1.0 - fy)
+                    + (c[k] * (1.0 - fx) + d[k] * fx) * fy;
             }
             let i = (y * width as usize + x) * 4;
             let alpha = p[3] / 255.0;
             for k in 0..3 {
-                out[i + k] = if alpha > 0.0 { (p[k] / alpha).round().clamp(0.0, 255.0) as u8 } else { 0 };
+                out[i + k] = if alpha > 0.0 {
+                    (p[k] / alpha).round().clamp(0.0, 255.0) as u8
+                } else {
+                    0
+                };
             }
             out[i + 3] = p[3].round().clamp(0.0, 255.0) as u8;
         }
@@ -461,8 +479,15 @@ fn transparent_cursor(size: NSSize, hot_spot: NSPoint) -> sdl3::Cursor {
     let (width, height) = (side(size.width), side(size.height));
     let pixels = vec![0u8; (width * height * 4) as usize];
     let (x, y) = hot_spot_pixels(hot_spot, size, width, height);
-    sdl3::video::create_color_cursor(width as i32, height as i32, &pixels, x, y, (width as i32, height as i32))
-        .unwrap_or(std::ptr::null_mut())
+    sdl3::video::create_color_cursor(
+        width as i32,
+        height as i32,
+        &pixels,
+        x,
+        y,
+        (width as i32, height as i32),
+    )
+    .unwrap_or(std::ptr::null_mut())
 }
 
 /// Build the SDL cursor for an image, or null when there are no pixels to
@@ -1613,7 +1638,10 @@ mod tests {
     /// differ by the scale - and an image with no size is one to one.
     #[test]
     fn an_x11_cursor_shows_at_its_points_times_the_desktop_scale() {
-        let size = NSSize { width: 64.0, height: 64.0 };
+        let size = NSSize {
+            width: 64.0,
+            height: 64.0,
+        };
         assert_eq!(shown_size(size, 128, 128, Some(1.25)), (80, 80));
         assert_eq!(shown_size(size, 128, 128, None), (128, 128));
         assert_eq!(shown_size(NSSize::default(), 16, 16, Some(2.0)), (16, 16));
@@ -1621,7 +1649,11 @@ mod tests {
 
     #[test]
     fn resampling_to_the_same_size_keeps_the_pixels() {
-        let bitmap = crate::raster::Bitmap { width: 2, height: 1, pixels: vec![255, 0, 0, 255, 0, 0, 255, 0] };
+        let bitmap = crate::raster::Bitmap {
+            width: 2,
+            height: 1,
+            pixels: vec![255, 0, 0, 255, 0, 0, 255, 0],
+        };
         let out = resample(&bitmap, 2, 1);
         assert_eq!(&out[0..4], &[255, 0, 0, 255]);
         assert_eq!(out[7], 0);

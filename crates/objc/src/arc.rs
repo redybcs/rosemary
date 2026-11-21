@@ -46,7 +46,10 @@ fn os_object_refcount(object: Id) -> Option<&'static OsObjectRefcount> {
 }
 
 /// Where `object` of a class counted inline keeps its extra references.
-fn inline_count<'a>(object: Id, class: Option<&'static crate::class::Class>) -> Option<&'a AtomicUsize> {
+fn inline_count<'a>(
+    object: Id,
+    class: Option<&'static crate::class::Class>,
+) -> Option<&'a AtomicUsize> {
     let offset = class?.inline_count_offset()?;
     // SAFETY: `count_inline`'s contract: every instance of the class was made
     // by `create_instance`, at least `offset` plus one word long, and the word

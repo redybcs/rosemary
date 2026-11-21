@@ -109,7 +109,10 @@ mod tests {
     #[test]
     fn a_boxed_object_counts_inline_and_frees_at_the_last_release() {
         let class = register::<Counted>(c"RosemaryBoxedInlineTest", None, false);
-        assert!(class.inline_count_offset().is_some(), "a boxed class counts inline");
+        assert!(
+            class.inline_count_offset().is_some(),
+            "a boxed class counts inline"
+        );
         let object = make(class, Counted) as Id;
         assert_eq!(objc::arc::retain_count(object), 1);
         objc::arc::retain(object);
@@ -117,8 +120,16 @@ mod tests {
         assert_eq!(objc::arc::retain_count(object), 3);
         objc::arc::release(object);
         objc::arc::release(object);
-        assert_eq!(DROPPED.load(Ordering::SeqCst), 0, "freed before the last release");
+        assert_eq!(
+            DROPPED.load(Ordering::SeqCst),
+            0,
+            "freed before the last release"
+        );
         objc::arc::release(object);
-        assert_eq!(DROPPED.load(Ordering::SeqCst), 1, "contents not freed at the last release");
+        assert_eq!(
+            DROPPED.load(Ordering::SeqCst),
+            1,
+            "contents not freed at the last release"
+        );
     }
 }

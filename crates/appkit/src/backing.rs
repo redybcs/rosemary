@@ -2157,7 +2157,10 @@ fn refresh_interval() -> Option<std::time::Duration> {
 /// draw, damage to compose, a store to present - including one whose present
 /// was deferred - or a window the GPU path asked to have recomposed.
 fn pending_work() -> bool {
-    !NEEDS_DISPLAY.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+    !NEEDS_DISPLAY
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_empty()
         || !NEEDS_DISPLAY_RECTS
             .lock()
             .unwrap_or_else(|e| e.into_inner())

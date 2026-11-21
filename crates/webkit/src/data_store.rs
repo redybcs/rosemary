@@ -5,8 +5,8 @@ use objc::object::Id;
 use objc::sel::Sel;
 
 use crate::engine::{self, Block, Engine};
-use crate::wpe::{self, GList, Ptr};
 use crate::send;
+use crate::wpe::{self, GList, Ptr};
 
 /// `+defaultDataStore`: one per process, and never freed.
 pub fn default_store() -> Id {

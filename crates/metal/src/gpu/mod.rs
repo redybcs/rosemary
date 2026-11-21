@@ -912,7 +912,11 @@ impl Gpu {
 
         // Two queues of the family when it has them: the second presents.
         let separate_present = families[queue_family as usize].queue_count >= 2;
-        let priorities: &[f32] = if separate_present { &[1.0, 1.0] } else { &[1.0] };
+        let priorities: &[f32] = if separate_present {
+            &[1.0, 1.0]
+        } else {
+            &[1.0]
+        };
         let queues = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family)
             .queue_priorities(priorities)];

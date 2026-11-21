@@ -241,7 +241,17 @@ pub(super) unsafe fn blit(
     to: [vk::Offset3D; 2],
 ) {
     // SAFETY: as this function's own contract.
-    if unsafe { super::upscale::blit(device, command_buffer, source, from, target, target_layout, to) } {
+    if unsafe {
+        super::upscale::blit(
+            device,
+            command_buffer,
+            source,
+            from,
+            target,
+            target_layout,
+            to,
+        )
+    } {
         return;
     }
     let region = vk::ImageBlit::default()

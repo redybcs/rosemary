@@ -80,7 +80,11 @@ fn interval_of(link: &DisplayLink) -> f64 {
 /// window of the program has input focus. Unset or 0, it makes no difference.
 pub(crate) fn background_interval() -> Option<f64> {
     static INTERVAL: std::sync::LazyLock<Option<f64>> = std::sync::LazyLock::new(|| {
-        let fps: f64 = std::env::var("ROSEMARY_BACKGROUND_FPS").ok()?.trim().parse().ok()?;
+        let fps: f64 = std::env::var("ROSEMARY_BACKGROUND_FPS")
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
         (fps.is_finite() && fps > 0.0).then(|| 1.0 / fps)
     });
     *INTERVAL

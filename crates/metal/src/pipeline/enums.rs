@@ -157,7 +157,10 @@ mod tests {
 
     #[test]
     fn three_component_vertex_formats_widen_to_their_four_component_siblings() {
-        assert_eq!(widened_vertex_format(vk::Format::R8G8B8_UNORM), Some(vk::Format::R8G8B8A8_UNORM));
+        assert_eq!(
+            widened_vertex_format(vk::Format::R8G8B8_UNORM),
+            Some(vk::Format::R8G8B8A8_UNORM)
+        );
         assert_eq!(
             widened_vertex_format(vk::Format::R16G16B16_SFLOAT),
             Some(vk::Format::R16G16B16A16_SFLOAT)
@@ -165,7 +168,10 @@ mod tests {
         // Every 3-component 8/16-bit Metal vertex format has a sibling.
         for metal in [2, 5, 8, 11, 14, 17, 20, 23, 26] {
             let format = vertex_format(metal).unwrap();
-            assert!(widened_vertex_format(format).is_some(), "MTLVertexFormat {metal}");
+            assert!(
+                widened_vertex_format(format).is_some(),
+                "MTLVertexFormat {metal}"
+            );
         }
         assert_eq!(widened_vertex_format(vk::Format::R32G32B32_SFLOAT), None);
     }

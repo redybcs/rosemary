@@ -1771,7 +1771,10 @@ static UNFOCUSED_WARP: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::
 
 /// A window took the keyboard: make the warp the guest asked for before it did.
 pub(crate) fn replay_unfocused_warp() {
-    let held = UNFOCUSED_WARP.lock().unwrap_or_else(|e| e.into_inner()).take();
+    let held = UNFOCUSED_WARP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
     if let Some((x, y)) = held {
         // SAFETY: a point, as the guest passed it.
         unsafe { CGWarpMouseCursorPosition(foundation::geometry::NSPoint { x, y }) };
@@ -2169,7 +2172,10 @@ pub fn apply_mouse_association() {
     // point instead: Xwayland locks the pointer only with no X cursor shown
     // (see `crate::cursor::refresh_drawn`).
     let drawn = relative && crate::cursor::drawable();
-    sdl3::video::set_hint(sdl3::video::HINT_RELATIVE_CURSOR_VISIBLE, if drawn { c"0" } else { c"1" });
+    sdl3::video::set_hint(
+        sdl3::video::HINT_RELATIVE_CURSOR_VISIBLE,
+        if drawn { c"0" } else { c"1" },
+    );
     let mut changed = false;
     for window in crate::window::sdl_windows() {
         if !relative {

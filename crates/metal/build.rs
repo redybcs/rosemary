@@ -26,19 +26,30 @@ fn main() {
 
     let available = compile_shaders(&source, &out) && write_tables(&source.join(HOOK), &out);
     if !available {
-        std::fs::write(out.join("ravu_size.rs"), "pub const RAVU_LUT_SIZE: (u32, u32) = (0, 0);\n").unwrap();
+        std::fs::write(
+            out.join("ravu_size.rs"),
+            "pub const RAVU_LUT_SIZE: (u32, u32) = (0, 0);\n",
+        )
+        .unwrap();
     }
     let mut module = format!("pub const AVAILABLE: bool = {available};\n");
     for (_, spv, _) in SHADERS {
         let name = spv.trim_end_matches(".spv").to_uppercase();
         module += &match available {
-            true => format!("pub static {name}: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{spv}\"));\n"),
+            true => format!(
+                "pub static {name}: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{spv}\"));\n"
+            ),
             false => format!("pub static {name}: &[u8] = &[];\n"),
         };
     }
-    for (name, file) in [("RAVU_LUT", "ravu_lut.bin"), ("RAVU_LUT_AR", "ravu_lut_ar.bin")] {
+    for (name, file) in [
+        ("RAVU_LUT", "ravu_lut.bin"),
+        ("RAVU_LUT_AR", "ravu_lut_ar.bin"),
+    ] {
         module += &match available {
-            true => format!("pub static {name}: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{file}\"));\n"),
+            true => format!(
+                "pub static {name}: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{file}\"));\n"
+            ),
             false => format!("pub static {name}: &[u8] = &[];\n"),
         };
     }
@@ -80,7 +91,10 @@ fn write_tables(hook: &Path, out: &Path) -> bool {
             in_texture = true;
             size = None;
         } else if let Some(rest) = line.strip_prefix("//!SIZE") {
-            let dims: Vec<usize> = rest.split_whitespace().map(|v| v.parse().unwrap()).collect();
+            let dims: Vec<usize> = rest
+                .split_whitespace()
+                .map(|v| v.parse().unwrap())
+                .collect();
             size = Some((dims[0], dims[1]));
         } else if in_texture && !line.starts_with("//!") && size.is_some() {
             let (width, height) = size.take().unwrap();
@@ -88,16 +102,28 @@ fn write_tables(hook: &Path, out: &Path) -> bool {
                 .step_by(2)
                 .map(|i| u8::from_str_radix(&line.trim()[i..i + 2], 16).unwrap())
                 .collect();
-            assert_eq!(bytes.len(), width * height * 16, "{}: a table is not RGBA float32", hook.display());
+            assert_eq!(
+                bytes.len(),
+                width * height * 16,
+                "{}: a table is not RGBA float32",
+                hook.display()
+            );
             let halves: Vec<u8> = bytes
                 .chunks_exact(4)
-                .flat_map(|v| half::f16::from_f32(f32::from_le_bytes(v.try_into().unwrap())).to_le_bytes())
+                .flat_map(|v| {
+                    half::f16::from_f32(f32::from_le_bytes(v.try_into().unwrap())).to_le_bytes()
+                })
                 .collect();
             tables.push((width, height, halves));
             in_texture = false;
         }
     }
-    assert_eq!(tables.len(), 2, "{}: expected the weight and anti-ringing tables", hook.display());
+    assert_eq!(
+        tables.len(),
+        2,
+        "{}: expected the weight and anti-ringing tables",
+        hook.display()
+    );
     let (width, height, _) = tables[0];
     std::fs::write(out.join("ravu_lut.bin"), &tables[0].2).unwrap();
     std::fs::write(out.join("ravu_lut_ar.bin"), &tables[1].2).unwrap();

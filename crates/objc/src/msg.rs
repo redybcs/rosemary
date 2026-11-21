@@ -1265,7 +1265,9 @@ mod tests {
     fn neighbouring_selectors_spread_over_the_table() {
         let class = 0x6000_0123_4560_usize;
         let base = 0x1_0040_0000_usize;
-        let mut seen: Vec<usize> = (0..64).map(|i| sends::index(class, base + i * 16)).collect();
+        let mut seen: Vec<usize> = (0..64)
+            .map(|i| sends::index(class, base + i * 16))
+            .collect();
         seen.sort_unstable();
         seen.dedup();
         assert!(seen.len() >= 60, "{} distinct entries of 64", seen.len());

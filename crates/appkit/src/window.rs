@@ -1002,7 +1002,8 @@ pub(crate) fn content_inset(object: Id) -> CGFloat {
 
 fn inset_of(object: Id, style_mask: usize, fullscreen: bool) -> CGFloat {
     let titled = style_mask & style::TITLED != 0;
-    let chrome = crate::decor::inset_for(crate::decor::config(), titled, is_panel(object), fullscreen);
+    let chrome =
+        crate::decor::inset_for(crate::decor::config(), titled, is_panel(object), fullscreen);
     // As on a Mac, what an app draws in a full-size view's top hides under the titlebar.
     match titled && !fullscreen && style_mask & style::FULL_SIZE_CONTENT_VIEW != 0 {
         true => chrome - crate::decor::titlebar_height(),
@@ -1534,7 +1535,11 @@ mod remembered {
         };
         let width = words.next()?.parse().ok().filter(|w: &i32| *w > 0)?;
         let height = words.next()?.parse().ok().filter(|h: &i32| *h > 0)?;
-        Some(Saved { mode, width, height })
+        Some(Saved {
+            mode,
+            width,
+            height,
+        })
     }
 
     /// What the file says, read once.
@@ -1542,7 +1547,10 @@ mod remembered {
         let path = path()?;
         let mut current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
         if current.is_none() {
-            *current = std::fs::read_to_string(path).ok().as_deref().and_then(parse);
+            *current = std::fs::read_to_string(path)
+                .ok()
+                .as_deref()
+                .and_then(parse);
         }
         *current
     }
@@ -1561,7 +1569,11 @@ mod remembered {
         if width <= 0 || height <= 0 {
             return;
         }
-        let next = Saved { mode, width, height };
+        let next = Saved {
+            mode,
+            width,
+            height,
+        };
         if current.is_some_and(|c| c.mode == next.mode && c.width == width && c.height == height) {
             return;
         }
@@ -1588,7 +1600,10 @@ mod remembered {
         #[test]
         fn a_saved_line_reads_back() {
             let saved = parse("maximized 1600 900\n").unwrap();
-            assert_eq!((saved.mode, saved.width, saved.height), (Mode::Maximized, 1600, 900));
+            assert_eq!(
+                (saved.mode, saved.width, saved.height),
+                (Mode::Maximized, 1600, 900)
+            );
             assert!(parse("tiny 0 0").is_none());
             assert!(parse("normal -5 10").is_none());
         }
@@ -1610,7 +1625,12 @@ fn adopt_remembered(receiver: Id, style_mask: usize) -> Option<NSSize> {
         return None;
     }
     remembered::WINDOW
-        .compare_exchange(0, receiver as usize, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire)
+        .compare_exchange(
+            0,
+            receiver as usize,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        )
         .ok()?;
     let saved = remembered::saved()?;
     Some(NSSize {
@@ -1621,7 +1641,9 @@ fn adopt_remembered(receiver: Id, style_mask: usize) -> Option<NSSize> {
 
 /// Its saved state, once, as it is first shown.
 fn restore_remembered_mode(receiver: Id) {
-    if !remembered::is(receiver) || remembered::RESTORED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+    if !remembered::is(receiver)
+        || remembered::RESTORED.swap(true, std::sync::atomic::Ordering::AcqRel)
+    {
         return;
     }
     let Some(saved) = remembered::saved() else {
@@ -1635,14 +1657,19 @@ fn restore_remembered_mode(receiver: Id) {
         }
         // Through AppKit's own toggle, so the guest hears it entered.
         remembered::Mode::Fullscreen => unsafe {
-            toggle_full_screen(receiver, objc::sel::get("toggleFullScreen:"), std::ptr::null_mut())
+            toggle_full_screen(
+                receiver,
+                objc::sel::get("toggleFullScreen:"),
+                std::ptr::null_mut(),
+            )
         },
     }
 }
 
 /// A resize or a change of state of the remembered window, written down.
 pub(crate) fn remember_state(receiver: Id) {
-    if !remembered::is(receiver) || !remembered::RESTORED.load(std::sync::atomic::Ordering::Acquire) {
+    if !remembered::is(receiver) || !remembered::RESTORED.load(std::sync::atomic::Ordering::Acquire)
+    {
         return;
     }
     let window = window_of(receiver);
@@ -2339,7 +2366,8 @@ pub(crate) fn apply_requested_sizes() {
     for (window, width, height) in sizes {
         let window = window as sdl3::Window;
         // Gone meanwhile, or already that size.
-        if window_for(window).is_null() || sdl3::video::window_size(window) == Some((width, height)) {
+        if window_for(window).is_null() || sdl3::video::window_size(window) == Some((width, height))
+        {
             continue;
         }
         sdl3::video::set_window_size(window, width, height);

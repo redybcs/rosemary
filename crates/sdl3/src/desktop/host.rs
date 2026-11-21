@@ -935,7 +935,14 @@ impl Host {
                 hot_y,
                 pixels,
             } => {
-                let made = video::create_color_cursor(width, height, &pixels, hot_x, hot_y, (width, height));
+                let made = video::create_color_cursor(
+                    width,
+                    height,
+                    &pixels,
+                    hot_x,
+                    hot_y,
+                    (width, height),
+                );
                 if let (Some(made), Some(peer)) = (made, self.peers.get_mut(&peer)) {
                     peer.cursors.insert(cursor, made as usize);
                 }

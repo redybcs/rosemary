@@ -295,7 +295,10 @@ impl State {
             if !empty || self.dedicated.contains(&index) {
                 continue;
             }
-            taken.push(std::mem::replace(&mut block.memory, vk::DeviceMemory::null()));
+            taken.push(std::mem::replace(
+                &mut block.memory,
+                vk::DeviceMemory::null(),
+            ));
             block.contents = std::ptr::null_mut();
             block.size = 0;
             block.free.clear();
@@ -564,11 +567,21 @@ mod take_empty_tests {
             dedicated: vec![2],
             generations: 4,
         };
-        let taken: Vec<u64> = state.take_empty_blocks().iter().map(|m| m.as_raw()).collect();
+        let taken: Vec<u64> = state
+            .take_empty_blocks()
+            .iter()
+            .map(|m| m.as_raw())
+            .collect();
         assert_eq!(taken, vec![1]);
         assert_eq!(state.blocks[0].size, 0, "the empty block is spent");
-        assert_eq!(state.blocks[1].size, 64, "a block with a buffer in it stays");
+        assert_eq!(
+            state.blocks[1].size, 64,
+            "a block with a buffer in it stays"
+        );
         assert_eq!(state.blocks[2].size, 64, "a dedicated block stays");
-        assert!(!state.owns(0, 1), "a range from the spent block is no longer its own");
+        assert!(
+            !state.owns(0, 1),
+            "a range from the spent block is no longer its own"
+        );
     }
 }

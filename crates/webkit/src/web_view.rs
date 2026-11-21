@@ -1496,7 +1496,13 @@ fn trace_page(engine: &Engine, id: usize, page: Ptr) {
 
 /// `ROSEMARY_TRACE_WEBKIT`: say why a view is or is not being drawn, when
 /// that changes.
-fn trace_state(id: usize, page: Ptr, hidden: bool, window: Id, frame: Option<&appkit::view::Frame>) {
+fn trace_state(
+    id: usize,
+    page: Ptr,
+    hidden: bool,
+    window: Id,
+    frame: Option<&appkit::view::Frame>,
+) {
     thread_local! {
         static LAST: RefCell<Vec<(usize, String)>> = const { RefCell::new(Vec::new()) };
     }
@@ -1610,9 +1616,9 @@ fn file_within_access(file: &std::path::Path, root: &std::path::Path) -> bool {
 
 unsafe extern "C" fn can_go_back(receiver: Id, _sel: Sel) -> u8 {
     // SAFETY: the view's widget.
-    page_of(receiver)
-        .is_some_and(|(engine, page)| unsafe { (engine.api.webkit_web_view_can_go_back)(page) != 0 })
-        as u8
+    page_of(receiver).is_some_and(|(engine, page)| unsafe {
+        (engine.api.webkit_web_view_can_go_back)(page) != 0
+    }) as u8
 }
 
 unsafe extern "C" fn can_go_forward(receiver: Id, _sel: Sel) -> u8 {

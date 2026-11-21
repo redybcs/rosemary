@@ -2,7 +2,7 @@
 //! title in semibold and the text under it, on the titlebar's gradient with a
 //! soft shadow round it.
 
-use crate::alert::{cap, Line};
+use crate::alert::{Line, cap};
 use crate::geometry::{Point, Rect, Size};
 use crate::paint::{Canvas, Image, Path};
 use crate::text::Font;
@@ -61,7 +61,10 @@ impl View for Banner {
         let pad = theme.banner_padding;
         let pad_y = theme.banner_padding_vertical;
         let size = theme.banner_icon_size;
-        let icon = self.icon.as_ref().map(|_| Rect::new(x + pad, y + pad_y, size, size));
+        let icon = self
+            .icon
+            .as_ref()
+            .map(|_| Rect::new(x + pad, y + pad_y, size, size));
         let left = icon.map_or(x + pad, |icon| icon.right() + pad);
         let text_width = x + width - pad - left;
         let height = theme.banner_line_height;
@@ -77,7 +80,10 @@ impl View for Banner {
             };
             for line in cap(font.wrap(body, font_size, text_width), limit) {
                 lines.push(Line {
-                    origin: Point::new(left, font.centered_baseline(font_size, text_height, height)),
+                    origin: Point::new(
+                        left,
+                        font.centered_baseline(font_size, text_height, height),
+                    ),
                     text: line.trim().to_string(),
                     bold,
                 });
@@ -103,16 +109,25 @@ impl View for Banner {
         // Rings, each a little wider and fainter, that add up darkest at the
         // edge; dropped a little, as light from above casts it.
         let spread = theme.banner_shadow_radius;
-        let ring = theme.banner_shadow.with_alpha(theme.banner_shadow.a / SHADOW_RINGS as f32);
+        let ring = theme
+            .banner_shadow
+            .with_alpha(theme.banner_shadow.a / SHADOW_RINGS as f32);
         // From the banner's own edge out to just inside the spread, so the
         // faintest ring still fits in the room left for it.
         for step in (0..SHADOW_RINGS).rev() {
             let grow = spread * step as f32 / SHADOW_RINGS as f32;
-            let rect = bounds.inset(-grow, -grow).offset(0.0, theme.banner_shadow_offset);
+            let rect = bounds
+                .inset(-grow, -grow)
+                .offset(0.0, theme.banner_shadow_offset);
             canvas.fill_rounded_rect(rect, radius + grow, ring);
         }
         let card = Path::rounded_rect(bounds, radius, false);
-        canvas.fill_path_vertical_gradient(&card, bounds, theme.titlebar_top, theme.titlebar_bottom);
+        canvas.fill_path_vertical_gradient(
+            &card,
+            bounds,
+            theme.titlebar_top,
+            theme.titlebar_bottom,
+        );
         canvas.stroke_rounded_rect(bounds, radius, 1.0 / canvas.scale(), theme.banner_border);
 
         if let (Some(image), Some(rect)) = (&self.icon, layout.icon) {
@@ -164,10 +179,15 @@ mod tests {
             short.bounds.height,
             (theme.banner_icon_size.max(text) + 2.0 * theme.banner_padding_vertical).ceil()
         );
-        let long = banner(&"Frankfurt am Main, Germany ".repeat(20)).layout(Rect::default(), &theme);
+        let long =
+            banner(&"Frankfurt am Main, Germany ".repeat(20)).layout(Rect::default(), &theme);
         let text_lines = long.lines.iter().filter(|l| !l.bold).count();
         assert_eq!(text_lines, TEXT_LINES);
-        assert!(long.lines.last().is_some_and(|l| l.text.ends_with('\u{2026}')));
+        assert!(
+            long.lines
+                .last()
+                .is_some_and(|l| l.text.ends_with('\u{2026}'))
+        );
         assert!(long.bounds.height >= short.bounds.height);
     }
 
@@ -180,7 +200,11 @@ mod tests {
             let layout = banner.layout(Rect::new(origin.x, origin.y, 0.0, 0.0), &theme);
             let (width, height) = (size.width.ceil() as usize, size.height.ceil() as usize);
             let mut pixels = vec![0u8; width * height * 4];
-            banner.paint(&mut Canvas::new(&mut pixels, width, height, width * 4, 1.0), &layout, &theme);
+            banner.paint(
+                &mut Canvas::new(&mut pixels, width, height, width * 4, 1.0),
+                &layout,
+                &theme,
+            );
             let at = |x: f32, y: f32| {
                 let i = (y as usize * width + x as usize) * 4;
                 [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
@@ -188,10 +212,16 @@ mod tests {
             // Inside, clear of the rounded corner and below the text: the
             // gradient, opaque.
             let corner = theme.banner_corner_radius;
-            let inside = at(layout.bounds.right() - corner - 2.0, layout.bounds.bottom() - 3.0);
+            let inside = at(
+                layout.bounds.right() - corner - 2.0,
+                layout.bounds.bottom() - 3.0,
+            );
             assert_eq!(inside[3], 255, "the banner is opaque");
             let expected = (theme.titlebar_bottom.b * 255.0).round() as i32;
-            assert!((i32::from(inside[0]) - expected).abs() <= 3, "{inside:?} is the gradient's foot");
+            assert!(
+                (i32::from(inside[0]) - expected).abs() <= 3,
+                "{inside:?} is the gradient's foot"
+            );
             // The corner of the room is beyond the shadow.
             assert_eq!(at(0.0, 0.0)[3], 0, "the shadow fades out before the edge");
             // Painted with room to spare around the room, nothing lands
@@ -203,12 +233,20 @@ mod tests {
                 Rect::new(origin.x + spare as f32, origin.y + spare as f32, 0.0, 0.0),
                 &theme,
             );
-            banner.paint(&mut Canvas::new(&mut roomy, wide, tall, wide * 4, 1.0), &shifted, &theme);
-            let outside = (0..tall).flat_map(|y| (0..wide).map(move |x| (x, y))).filter(|&(x, y)| {
-                x < spare || y < spare || x >= spare + width || y >= spare + height
-            });
+            banner.paint(
+                &mut Canvas::new(&mut roomy, wide, tall, wide * 4, 1.0),
+                &shifted,
+                &theme,
+            );
+            let outside = (0..tall)
+                .flat_map(|y| (0..wide).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    x < spare || y < spare || x >= spare + width || y >= spare + height
+                });
             assert!(
-                outside.into_iter().all(|(x, y)| roomy[(y * wide + x) * 4 + 3] == 0),
+                outside
+                    .into_iter()
+                    .all(|(x, y)| roomy[(y * wide + x) * 4 + 3] == 0),
                 "the shadow fits in the room Banner::canvas leaves"
             );
             // Just outside the banner, the shadow shows.

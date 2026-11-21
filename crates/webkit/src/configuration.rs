@@ -3,8 +3,8 @@ use objc::object::Id;
 use objc::sel::Sel;
 
 use crate::engine::{self, Engine};
-use crate::wpe::{self, Ptr};
 use crate::send;
+use crate::wpe::{self, Ptr};
 use foundation::boxed;
 
 #[derive(Default)]

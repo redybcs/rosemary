@@ -449,7 +449,11 @@ fn allowed_cpus() -> Option<std::collections::BTreeSet<usize>> {
     }
     let bits = 8 * size_of::<libc::cpu_set_t>();
     // SAFETY: each index is inside the set's bits.
-    Some((0..bits).filter(|cpu| unsafe { libc::CPU_ISSET(*cpu, &set) }).collect())
+    Some(
+        (0..bits)
+            .filter(|cpu| unsafe { libc::CPU_ISSET(*cpu, &set) })
+            .collect(),
+    )
 }
 
 /// Each `cpuN` directory in sysfs.

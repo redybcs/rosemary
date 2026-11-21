@@ -382,7 +382,13 @@ impl AddressSpace for MmapSpace {
                 return false;
             };
             // SAFETY: advice over memory this space owns, which it reads not.
-            unsafe { libc::madvise(dst as *mut c_void, (end - start) as usize, libc::MADV_HUGEPAGE) == 0 }
+            unsafe {
+                libc::madvise(
+                    dst as *mut c_void,
+                    (end - start) as usize,
+                    libc::MADV_HUGEPAGE,
+                ) == 0
+            }
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -407,7 +413,13 @@ impl AddressSpace for MmapSpace {
             };
             // SAFETY: memory this space owns and has written. A kernel that
             // cannot collapse refuses, and the pages stay as they are.
-            unsafe { libc::madvise(dst as *mut c_void, (end - start) as usize, libc::MADV_COLLAPSE) };
+            unsafe {
+                libc::madvise(
+                    dst as *mut c_void,
+                    (end - start) as usize,
+                    libc::MADV_COLLAPSE,
+                )
+            };
         }
         #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
         let _ = (addr, len);
@@ -529,7 +541,9 @@ mod tests {
             return;
         };
         let mut mem = MmapSpace::new();
-        let base = mem.reserve(3 * huge as usize, 0x1000, Placement::Anywhere).unwrap();
+        let base = mem
+            .reserve(3 * huge as usize, 0x1000, Placement::Anywhere)
+            .unwrap();
         // Less than one aligned huge page inside: nothing to advise.
         assert!(!mem.advise_huge(base, (huge / 2) as usize));
         // Three huge pages' worth holds at least two whole aligned ones.

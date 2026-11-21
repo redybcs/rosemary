@@ -304,13 +304,20 @@ pub(crate) fn image_description(descriptor: &TextureDescriptor) -> Option<ImageD
         // The descriptor's swizzle over the format's own mapping, as a view
         // made with one composes it; a value Metal does not define leaves the
         // format's mapping alone.
-        components: compose_swizzle(gpu::pixel_format_components(descriptor.pixel_format), descriptor.swizzle)
-            .unwrap_or_else(|| gpu::pixel_format_components(descriptor.pixel_format)),
+        components: compose_swizzle(
+            gpu::pixel_format_components(descriptor.pixel_format),
+            descriptor.swizzle,
+        )
+        .unwrap_or_else(|| gpu::pixel_format_components(descriptor.pixel_format)),
     })
 }
 
 /// `-[MTLTextureDescriptor setSwizzle:]`.
-pub(super) unsafe extern "C" fn set_descriptor_swizzle(receiver: Id, _sel: Sel, swizzle: SwizzleChannels) {
+pub(super) unsafe extern "C" fn set_descriptor_swizzle(
+    receiver: Id,
+    _sel: Sel,
+    swizzle: SwizzleChannels,
+) {
     // SAFETY: a texture descriptor of this crate's.
     unsafe { object::body::<TextureDescriptor>(receiver) }.swizzle = swizzle;
 }
@@ -1224,9 +1231,15 @@ mod descriptor_swizzle_tests {
             alpha: MTL_TEXTURE_SWIZZLE_ONE,
         };
         let composed = compose_swizzle(gpu::pixel_format_components(1), all_alpha).unwrap();
-        assert_eq!([composed.r, composed.g, composed.b, composed.a], [S::R, S::R, S::R, S::ONE]);
+        assert_eq!(
+            [composed.r, composed.g, composed.b, composed.a],
+            [S::R, S::R, S::R, S::ONE]
+        );
         // An undefined channel value is refused rather than guessed.
-        let bad = SwizzleChannels { red: 9, ..IDENTITY_SWIZZLE };
+        let bad = SwizzleChannels {
+            red: 9,
+            ..IDENTITY_SWIZZLE
+        };
         assert!(compose_swizzle(vk::ComponentMapping::default(), bad).is_none());
     }
 }

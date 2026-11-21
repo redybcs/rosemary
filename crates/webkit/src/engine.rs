@@ -71,7 +71,9 @@ fn start() -> Result<Engine, String> {
         unsafe { (api.wpe_display_wayland_connect)(display, socket.as_ptr(), &mut error) } != 0;
     // SAFETY: the error the call above may have set.
     if let Some((_, why)) = unsafe { wpe::take_error(api, error) } {
-        return Err(format!("WPE could not connect to the web view compositor: {why}"));
+        return Err(format!(
+            "WPE could not connect to the web view compositor: {why}"
+        ));
     }
     if !connected {
         return Err("WPE could not connect to the web view compositor".to_string());

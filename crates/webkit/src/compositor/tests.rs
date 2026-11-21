@@ -320,13 +320,13 @@ fn a_toplevel_is_drawn_throttled_and_given_input() {
     compositor.send(Command::Release { surface: id, done });
     answered.recv().expect("the release is answered");
     queue.roundtrip(&mut client).expect("roundtrip");
-    assert!(client.frame_done, "the release left the callback unanswered");
+    assert!(
+        client.frame_done,
+        "the release left the callback unanswered"
+    );
     let started = Instant::now();
     while compositor.take_frame(id).is_none() {
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "no third frame"
-        );
+        assert!(started.elapsed() < Duration::from_secs(5), "no third frame");
         queue.roundtrip(&mut client).expect("roundtrip");
     }
 

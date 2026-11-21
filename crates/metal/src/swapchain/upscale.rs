@@ -103,7 +103,12 @@ pub(super) unsafe fn blit(
     let Some(kind) = kind() else {
         return false;
     };
-    let size = |r: [vk::Offset3D; 2]| ((r[1].x - r[0].x).unsigned_abs(), (r[1].y - r[0].y).unsigned_abs());
+    let size = |r: [vk::Offset3D; 2]| {
+        (
+            (r[1].x - r[0].x).unsigned_abs(),
+            (r[1].y - r[0].y).unsigned_abs(),
+        )
+    };
     let (source_size, target_size) = (size(from), size(to));
     let enlarges = source_size.0 <= target_size.0
         && source_size.1 <= target_size.1
@@ -126,8 +131,22 @@ pub(super) unsafe fn blit(
             }
         }
     }
-    let upscaler = upscalers.iter_mut().find(|u| std::ptr::eq(u.gpu, gpu)).unwrap();
-    match unsafe { upscaler.record(command_buffer, source, from, target, target_layout, to, source_size, target_size) } {
+    let upscaler = upscalers
+        .iter_mut()
+        .find(|u| std::ptr::eq(u.gpu, gpu))
+        .unwrap();
+    match unsafe {
+        upscaler.record(
+            command_buffer,
+            source,
+            from,
+            target,
+            target_layout,
+            to,
+            source_size,
+            target_size,
+        )
+    } {
         Ok(()) => true,
         Err(reason) => {
             gpu::trace(format!("upscale failed, blitting instead: {reason}"));
@@ -136,7 +155,12 @@ pub(super) unsafe fn blit(
     }
 }
 
-fn image(gpu: &Gpu, format: vk::Format, (width, height): (u32, u32), usage: u64) -> Result<GpuImage, String> {
+fn image(
+    gpu: &Gpu,
+    format: vk::Format,
+    (width, height): (u32, u32),
+    usage: u64,
+) -> Result<GpuImage, String> {
     gpu.create_image(&ImageDescription {
         image_type: vk::ImageType::TYPE_2D,
         view_type: vk::ImageViewType::TYPE_2D,
@@ -176,7 +200,8 @@ impl Upscaler {
             .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
             .max_lod(0.0);
         // SAFETY: well-formed create infos on this live device, here and below.
-        let sampler = unsafe { device.create_sampler(&sampler_info, None) }.map_err(|e| fail("sampler", e))?;
+        let sampler = unsafe { device.create_sampler(&sampler_info, None) }
+            .map_err(|e| fail("sampler", e))?;
         let binding = |index: u32, kind: vk::DescriptorType| {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(index)
@@ -191,7 +216,10 @@ impl Upscaler {
             binding(3, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
         ];
         let set_layout = unsafe {
-            device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings), None)
+            device.create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
+                None,
+            )
         }
         .map_err(|e| fail("descriptor set layout", e))?;
         let push = [vk::PushConstantRange::default()
@@ -200,22 +228,31 @@ impl Upscaler {
         let set_layouts = [set_layout];
         let layout = unsafe {
             device.create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts).push_constant_ranges(&push),
+                &vk::PipelineLayoutCreateInfo::default()
+                    .set_layouts(&set_layouts)
+                    .push_constant_ranges(&push),
                 None,
             )
         }
         .map_err(|e| fail("pipeline layout", e))?;
         let pipeline_of = |spirv: &[u8]| -> Result<vk::Pipeline, String> {
-            let words = ash::util::read_spv(&mut std::io::Cursor::new(spirv)).map_err(|e| e.to_string())?;
-            let module = unsafe { device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None) }
-                .map_err(|e| fail("shader module", e))?;
+            let words =
+                ash::util::read_spv(&mut std::io::Cursor::new(spirv)).map_err(|e| e.to_string())?;
+            let module = unsafe {
+                device
+                    .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
+            }
+            .map_err(|e| fail("shader module", e))?;
             let stage = vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::COMPUTE)
                 .module(module)
                 .name(c"main");
-            let info = [vk::ComputePipelineCreateInfo::default().stage(stage).layout(layout)];
-            let pipeline = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &info, None) }
-                .map_err(|(_, e)| fail("compute pipeline", e))?[0];
+            let info = [vk::ComputePipelineCreateInfo::default()
+                .stage(stage)
+                .layout(layout)];
+            let pipeline =
+                unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &info, None) }
+                    .map_err(|(_, e)| fail("compute pipeline", e))?[0];
             unsafe { device.destroy_shader_module(module, None) };
             Ok(pipeline)
         };
@@ -224,33 +261,67 @@ impl Upscaler {
             Kind::Ravu => (pipeline_of(data::RAVU_AR)?, pipeline_of(data::SHARPEN)?),
         };
         let sizes = [
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, descriptor_count: 6 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 2 },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: 6,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 2,
+            },
         ];
         let pool = unsafe {
-            device.create_descriptor_pool(&vk::DescriptorPoolCreateInfo::default().max_sets(2).pool_sizes(&sizes), None)
+            device.create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(2)
+                    .pool_sizes(&sizes),
+                None,
+            )
         }
         .map_err(|e| fail("descriptor pool", e))?;
         let luts = match kind {
             Kind::Sgsr => None,
             Kind::Ravu => {
                 let table = |bytes: &[u8]| -> Result<(GpuImage, GpuBuffer), String> {
-                    let image = image(gpu, vk::Format::R16G16B16A16_SFLOAT, data::RAVU_LUT_SIZE, gpu::USAGE_SHADER_READ)?;
+                    let image = image(
+                        gpu,
+                        vk::Format::R16G16B16A16_SFLOAT,
+                        data::RAVU_LUT_SIZE,
+                        gpu::USAGE_SHADER_READ,
+                    )?;
                     let staging = gpu.create_buffer(bytes.len() as u64)?;
                     // SAFETY: a mapped buffer of exactly this length.
-                    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), staging.contents, bytes.len()) };
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), staging.contents, bytes.len())
+                    };
                     Ok((image, staging))
                 };
                 Some([table(data::RAVU_LUT)?, table(data::RAVU_LUT_AR)?])
             }
         };
-        Ok(Self { gpu, kind, sampler, set_layout, layout, pipeline, sharpen, pool, luts, luts_uploaded: false, target: None })
+        Ok(Self {
+            gpu,
+            kind,
+            sampler,
+            set_layout,
+            layout,
+            pipeline,
+            sharpen,
+            pool,
+            luts,
+            luts_uploaded: false,
+            target: None,
+        })
     }
 
     /// Images and descriptor sets for these sizes, replacing any for others
     /// once the queue has finished with them.
     fn target_for(&mut self, source: (u32, u32), target: (u32, u32)) -> Result<(), String> {
-        if self.target.as_ref().is_some_and(|t| t.source == source && t.target == target) {
+        if self
+            .target
+            .as_ref()
+            .is_some_and(|t| t.source == source && t.target == target)
+        {
             return Ok(());
         }
         let gpu = self.gpu;
@@ -258,12 +329,18 @@ impl Upscaler {
             // A resize, never a frame: the same wait presentation makes when
             // it rebuilds a swapchain.
             gpu.wait_queue_idle();
-            for image in [Some(old.input), old.middle, Some(old.output)].into_iter().flatten() {
+            for image in [Some(old.input), old.middle, Some(old.output)]
+                .into_iter()
+                .flatten()
+            {
                 gpu.destroy_image(image);
             }
             // SAFETY: the queue is idle, so no set from this pool is in use.
-            unsafe { gpu.device.reset_descriptor_pool(self.pool, vk::DescriptorPoolResetFlags::empty()) }
-                .map_err(|e| format!("descriptor pool reset: {e:?}"))?;
+            unsafe {
+                gpu.device
+                    .reset_descriptor_pool(self.pool, vk::DescriptorPoolResetFlags::empty())
+            }
+            .map_err(|e| format!("descriptor pool reset: {e:?}"))?;
         }
         let rgba = vk::Format::R8G8B8A8_UNORM;
         let input = image(gpu, rgba, source, gpu::USAGE_SHADER_READ)?;
@@ -276,19 +353,32 @@ impl Upscaler {
         let layouts = [self.set_layout, self.set_layout];
         let sets = unsafe {
             gpu.device.allocate_descriptor_sets(
-                &vk::DescriptorSetAllocateInfo::default().descriptor_pool(self.pool).set_layouts(&layouts),
+                &vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(self.pool)
+                    .set_layouts(&layouts),
             )
         }
         .map_err(|e| format!("descriptor sets: {e:?}"))?;
         let sampled = |view: vk::ImageView| {
-            [vk::DescriptorImageInfo { sampler: self.sampler, image_view: view, image_layout: vk::ImageLayout::GENERAL }]
+            [vk::DescriptorImageInfo {
+                sampler: self.sampler,
+                image_view: view,
+                image_layout: vk::ImageLayout::GENERAL,
+            }]
         };
         let written = |view: vk::ImageView| {
-            [vk::DescriptorImageInfo { sampler: vk::Sampler::null(), image_view: view, image_layout: vk::ImageLayout::GENERAL }]
+            [vk::DescriptorImageInfo {
+                sampler: vk::Sampler::null(),
+                image_view: view,
+                image_layout: vk::ImageLayout::GENERAL,
+            }]
         };
         let first_out = middle.as_ref().unwrap_or(&output).view;
         let (main_src, main_dst) = (sampled(input.view), written(first_out));
-        let luts = self.luts.as_ref().map(|[a, b]| (sampled(a.0.view), sampled(b.0.view)));
+        let luts = self
+            .luts
+            .as_ref()
+            .map(|[a, b]| (sampled(a.0.view), sampled(b.0.view)));
         let mut writes = vec![
             vk::WriteDescriptorSet::default()
                 .dst_set(sets[0])
@@ -370,7 +460,9 @@ impl Upscaler {
                 src_stage,
                 dst_stage,
                 vk::DependencyFlags::empty(),
-                &[vk::MemoryBarrier::default().src_access_mask(src_access).dst_access_mask(dst_access)],
+                &[vk::MemoryBarrier::default()
+                    .src_access_mask(src_access)
+                    .dst_access_mask(dst_access)],
                 &[],
                 &[],
             )
@@ -382,7 +474,9 @@ impl Upscaler {
                     vk::ImageMemoryBarrier::default()
                         .old_layout(old)
                         .new_layout(vk::ImageLayout::GENERAL)
-                        .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
+                        .dst_access_mask(
+                            vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
+                        )
                         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                         .image(image)
@@ -416,7 +510,11 @@ impl Upscaler {
                         .subresource_range(color_range());
                     let region = vk::BufferImageCopy::default()
                         .image_subresource(super::present::whole_color())
-                        .image_extent(vk::Extent3D { width: image.width, height: image.height, depth: 1 });
+                        .image_extent(vk::Extent3D {
+                            width: image.width,
+                            height: image.height,
+                            depth: 1,
+                        });
                     unsafe {
                         device.cmd_pipeline_barrier(
                             cb,
@@ -443,8 +541,11 @@ impl Upscaler {
 
         let t = self.target.as_mut().expect("made above");
         if t.fresh {
-            let images: Vec<_> =
-                [Some(&t.input), t.middle.as_ref(), Some(&t.output)].into_iter().flatten().map(|i| i.image).collect();
+            let images: Vec<_> = [Some(&t.input), t.middle.as_ref(), Some(&t.output)]
+                .into_iter()
+                .flatten()
+                .map(|i| i.image)
+                .collect();
             to_general(&images, vk::ImageLayout::UNDEFINED);
             t.fresh = false;
         }
@@ -456,7 +557,16 @@ impl Upscaler {
             vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COMPUTE_SHADER,
             vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::SHADER_WRITE,
         );
-        let whole = |(w, h): (u32, u32)| [vk::Offset3D { x: 0, y: 0, z: 0 }, vk::Offset3D { x: w as i32, y: h as i32, z: 1 }];
+        let whole = |(w, h): (u32, u32)| {
+            [
+                vk::Offset3D { x: 0, y: 0, z: 0 },
+                vk::Offset3D {
+                    x: w as i32,
+                    y: h as i32,
+                    z: 1,
+                },
+            ]
+        };
         let copy = |src: vk::Image, src_offsets, dst: vk::Image, dst_layout, dst_offsets| {
             let region = vk::ImageBlit::default()
                 .src_subresource(super::present::whole_color())
@@ -464,10 +574,24 @@ impl Upscaler {
                 .dst_subresource(super::present::whole_color())
                 .dst_offsets(dst_offsets);
             unsafe {
-                device.cmd_blit_image(cb, src, vk::ImageLayout::GENERAL, dst, dst_layout, &[region], vk::Filter::NEAREST)
+                device.cmd_blit_image(
+                    cb,
+                    src,
+                    vk::ImageLayout::GENERAL,
+                    dst,
+                    dst_layout,
+                    &[region],
+                    vk::Filter::NEAREST,
+                )
             };
         };
-        copy(source, from, t.input.image, vk::ImageLayout::GENERAL, whole(source_size));
+        copy(
+            source,
+            from,
+            t.input.image,
+            vk::ImageLayout::GENERAL,
+            whole(source_size),
+        );
         memory(
             vk::PipelineStageFlags::TRANSFER,
             vk::AccessFlags::TRANSFER_WRITE,
@@ -482,12 +606,22 @@ impl Upscaler {
         };
         // SAFETY: `Params` is plain old data of exactly the pushed size.
         let push = unsafe {
-            std::slice::from_raw_parts((&params as *const Params).cast::<u8>(), std::mem::size_of::<Params>())
+            std::slice::from_raw_parts(
+                (&params as *const Params).cast::<u8>(),
+                std::mem::size_of::<Params>(),
+            )
         };
         let groups = (target_size.0.div_ceil(8), target_size.1.div_ceil(8));
         let dispatch = |pipeline: vk::Pipeline, set: vk::DescriptorSet| unsafe {
             device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, pipeline);
-            device.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::COMPUTE, self.layout, 0, &[set], &[]);
+            device.cmd_bind_descriptor_sets(
+                cb,
+                vk::PipelineBindPoint::COMPUTE,
+                self.layout,
+                0,
+                &[set],
+                &[],
+            );
             device.cmd_push_constants(cb, self.layout, vk::ShaderStageFlags::COMPUTE, 0, push);
             device.cmd_dispatch(cb, groups.0, groups.1, 1);
         };
@@ -499,13 +633,26 @@ impl Upscaler {
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::AccessFlags::SHADER_READ,
             );
-            let sharpen_push = Params { src_size: params.dst_size, ..params };
+            let sharpen_push = Params {
+                src_size: params.dst_size,
+                ..params
+            };
             let push = unsafe {
-                std::slice::from_raw_parts((&sharpen_push as *const Params).cast::<u8>(), std::mem::size_of::<Params>())
+                std::slice::from_raw_parts(
+                    (&sharpen_push as *const Params).cast::<u8>(),
+                    std::mem::size_of::<Params>(),
+                )
             };
             unsafe {
                 device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, self.sharpen);
-                device.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::COMPUTE, self.layout, 0, &[t.sharpen_set], &[]);
+                device.cmd_bind_descriptor_sets(
+                    cb,
+                    vk::PipelineBindPoint::COMPUTE,
+                    self.layout,
+                    0,
+                    &[t.sharpen_set],
+                    &[],
+                );
                 device.cmd_push_constants(cb, self.layout, vk::ShaderStageFlags::COMPUTE, 0, push);
                 device.cmd_dispatch(cb, groups.0, groups.1, 1);
             }
@@ -516,7 +663,13 @@ impl Upscaler {
             vk::PipelineStageFlags::TRANSFER,
             vk::AccessFlags::TRANSFER_READ,
         );
-        copy(t.output.image, whole(target_size), target, target_layout, to);
+        copy(
+            t.output.image,
+            whole(target_size),
+            target,
+            target_layout,
+            to,
+        );
         Ok(())
     }
 }

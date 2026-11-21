@@ -1079,7 +1079,10 @@ pub unsafe extern "C" fn AudioDeviceStop(object: ObjectId, id: *mut c_void) -> i
 /// No other thread may still use this proc's stream handle.
 unsafe fn stop(registration: &std::sync::Mutex<Proc>) {
     let stream = std::mem::replace(
-        &mut registration.lock().unwrap_or_else(|e| e.into_inner()).stream,
+        &mut registration
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stream,
         std::ptr::null_mut(),
     );
     if !stream.is_null() {

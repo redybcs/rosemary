@@ -258,23 +258,25 @@ pub(crate) fn start_collapsing() {
     let Some(huge) = huge_page_size() else {
         return;
     };
-    let Some(pause) =
-        std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_millisecs")
-            .ok()
-            .and_then(|text| text.trim().parse::<u64>().ok())
-    else {
+    let Some(pause) = std::fs::read_to_string(
+        "/sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_millisecs",
+    )
+    .ok()
+    .and_then(|text| text.trim().parse::<u64>().ok()) else {
         return;
     };
-    let _ = std::thread::Builder::new().name("rosemary-thp".to_string()).spawn(move || {
-        // The lowest priority there is: this work never competes with the
-        // guest's own. On Linux `setpriority` with 0 is the calling thread.
-        // SAFETY: a plain system call.
-        unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, 19) };
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(pause));
-            collapse_resident(huge);
-        }
-    });
+    let _ = std::thread::Builder::new()
+        .name("rosemary-thp".to_string())
+        .spawn(move || {
+            // The lowest priority there is: this work never competes with the
+            // guest's own. On Linux `setpriority` with 0 is the calling thread.
+            // SAFETY: a plain system call.
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, 19) };
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(pause));
+                collapse_resident(huge);
+            }
+        });
 }
 
 /// One pass of [`start_collapsing`].
@@ -291,9 +293,9 @@ fn collapse_resident(huge: usize) {
         while chunk + huge <= end {
             // SAFETY: a range inside a mapping the kernel just listed; mincore
             // reads nothing of it, and a mapping removed since only fails.
-            let whole = unsafe {
-                libc::mincore(chunk as *mut c_void, huge, resident.as_mut_ptr()) == 0
-            } && resident.iter().all(|state| state & 1 != 0);
+            let whole =
+                unsafe { libc::mincore(chunk as *mut c_void, huge, resident.as_mut_ptr()) == 0 }
+                    && resident.iter().all(|state| state & 1 != 0);
             if whole {
                 // SAFETY: advice over memory already resident; a range already
                 // huge, or one the kernel cannot merge, is left as it is.
@@ -315,7 +317,10 @@ fn mergeable(smaps: &str, huge: usize) -> Vec<(usize, usize)> {
         let mut fields = line.split_whitespace();
         let Some(first) = fields.next() else { continue };
         if let Some((low, high)) = first.split_once('-')
-            && let (Ok(low), Ok(high)) = (usize::from_str_radix(low, 16), usize::from_str_radix(high, 16))
+            && let (Ok(low), Ok(high)) = (
+                usize::from_str_radix(low, 16),
+                usize::from_str_radix(high, 16),
+            )
         {
             let perms = fields.next().unwrap_or("");
             let inode = fields.nth(2).unwrap_or("");
@@ -326,7 +331,11 @@ fn mergeable(smaps: &str, huge: usize) -> Vec<(usize, usize)> {
             continue;
         }
         let kib = |fields: &mut std::str::SplitWhitespace| {
-            fields.next().and_then(|n| n.parse::<usize>().ok()).unwrap_or(0) * 1024
+            fields
+                .next()
+                .and_then(|n| n.parse::<usize>().ok())
+                .unwrap_or(0)
+                * 1024
         };
         match first {
             "Rss:" => rss = kib(&mut fields),
@@ -626,6 +635,9 @@ Rss:              100000 kB
 AnonHugePages:         0 kB
 THPeligible:    1
 ";
-        assert_eq!(mergeable(smaps, 2 << 20), vec![(0x7f0000000000, 0x7f0040000000)]);
+        assert_eq!(
+            mergeable(smaps, 2 << 20),
+            vec![(0x7f0000000000, 0x7f0040000000)]
+        );
     }
 }

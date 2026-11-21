@@ -474,7 +474,14 @@ impl Encoder {
             entries,
             ..SetCache::default()
         });
-        (bound, set_cache, wanted, dynamic_offsets, descriptor_scratch, attachments)
+        (
+            bound,
+            set_cache,
+            wanted,
+            dynamic_offsets,
+            descriptor_scratch,
+            attachments,
+        )
     }
 
     /// Hand this encoder's buffers to the next one, as it goes.
@@ -482,7 +489,10 @@ impl Encoder {
         use std::mem::take;
         EncoderScratch {
             wanted: self.wanted.each_mut().map(|wanted| take(wanted)),
-            cached_entries: self.set_cache.each_mut().map(|cache| take(&mut cache.entries)),
+            cached_entries: self
+                .set_cache
+                .each_mut()
+                .map(|cache| take(&mut cache.entries)),
             dynamic_offsets: take(&mut self.dynamic_offsets),
             bound_offsets: self.bound.each_mut().map(|bound| take(&mut bound.offsets)),
             descriptor_scratch: take(&mut self.descriptor_scratch),
@@ -1169,17 +1179,32 @@ mod scratch_tests {
     #[test]
     fn recycled_scratch_is_empty_and_caches_nothing() {
         let mut scratch = EncoderScratch::default();
-        scratch.wanted[0].push(DescriptorEntry { binding: 0, kind: vk::DescriptorType::SAMPLER, handle: 0, offset: 0, range: 0, dynamic_offset: 0 });
-        scratch.cached_entries[1].push(DescriptorEntry { binding: 0, kind: vk::DescriptorType::SAMPLER, handle: 0, offset: 0, range: 0, dynamic_offset: 0 });
+        scratch.wanted[0].push(DescriptorEntry {
+            binding: 0,
+            kind: vk::DescriptorType::SAMPLER,
+            handle: 0,
+            offset: 0,
+            range: 0,
+            dynamic_offset: 0,
+        });
+        scratch.cached_entries[1].push(DescriptorEntry {
+            binding: 0,
+            kind: vk::DescriptorType::SAMPLER,
+            handle: 0,
+            offset: 0,
+            range: 0,
+            dynamic_offset: 0,
+        });
         scratch.dynamic_offsets.push(64);
         scratch.bound_offsets[0].push(128);
-        scratch.attachments.push((vk::Image::null(), vk::ImageAspectFlags::COLOR));
+        scratch
+            .attachments
+            .push((vk::Image::null(), vk::ImageAspectFlags::COLOR));
         let capacity = scratch.wanted[0].capacity();
         scratch.give_back();
 
         // The pool may hold others too; every one must be empty.
-        let pooled: Vec<EncoderScratch> =
-            std::mem::take(&mut *ENCODER_SCRATCH.lock().unwrap());
+        let pooled: Vec<EncoderScratch> = std::mem::take(&mut *ENCODER_SCRATCH.lock().unwrap());
         assert!(pooled.iter().any(|s| s.wanted[0].capacity() >= capacity));
         for scratch in pooled {
             assert!(scratch.wanted.iter().all(Vec::is_empty));

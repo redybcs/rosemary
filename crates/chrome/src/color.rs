@@ -66,7 +66,10 @@ struct Painter<'f, 'a> {
 
 impl Painter<'_, '_> {
     fn transform(&self) -> Transform {
-        *self.transforms.last().expect("the outermost transform is never popped")
+        *self
+            .transforms
+            .last()
+            .expect("the outermost transform is never popped")
     }
 
     fn clip_to(&mut self, path: Option<tiny_skia::Path>) {
@@ -100,7 +103,8 @@ impl Painter<'_, '_> {
                 // The gradient runs from p0 towards p1, turned to stand square
                 // on the line from p0 to p2.
                 let (dx, dy) = (g.x2 - g.x0, g.y2 - g.y0);
-                let along = ((g.x1 - g.x0) * -dy + (g.y1 - g.y0) * dx) / (dx * dx + dy * dy).max(f32::EPSILON);
+                let along = ((g.x1 - g.x0) * -dy + (g.y1 - g.y0) * dx)
+                    / (dx * dx + dy * dy).max(f32::EPSILON);
                 let end = Point::from_xy(g.x0 - dy * along, g.y0 + dx * along);
                 LinearGradient::new(
                     Point::from_xy(g.x0, g.y0),
@@ -119,7 +123,10 @@ impl Painter<'_, '_> {
                 transform,
             ),
             // tiny-skia has no sweep: its first colour stands in.
-            Paint::SweepGradient(g) => g.stops(0, coords).next().map(|stop| Shader::SolidColor(color(stop.color))),
+            Paint::SweepGradient(g) => g
+                .stops(0, coords)
+                .next()
+                .map(|stop| Shader::SolidColor(color(stop.color))),
         }
     }
 }
@@ -208,8 +215,17 @@ impl<'a> colr::Painter<'a> for Painter<'_, 'a> {
         let mut brush = tiny_skia::Paint::default();
         brush.shader = shader;
         brush.anti_alias = true;
-        let (layer, _) = self.layers.last_mut().expect("the image itself is never popped");
-        layer.fill_path(&path, &brush, FillRule::Winding, Transform::identity(), mask.as_ref());
+        let (layer, _) = self
+            .layers
+            .last_mut()
+            .expect("the image itself is never popped");
+        layer.fill_path(
+            &path,
+            &brush,
+            FillRule::Winding,
+            Transform::identity(),
+            mask.as_ref(),
+        );
     }
 
     fn push_clip(&mut self) {
@@ -217,9 +233,10 @@ impl<'a> colr::Painter<'a> for Painter<'_, 'a> {
     }
 
     fn push_clip_box(&mut self, clipbox: colr::ClipBox) {
-        let rect = tiny_skia::Rect::from_ltrb(clipbox.x_min, clipbox.y_min, clipbox.x_max, clipbox.y_max)
-            .map(tiny_skia::PathBuilder::from_rect)
-            .and_then(|path| path.transform(self.transform()));
+        let rect =
+            tiny_skia::Rect::from_ltrb(clipbox.x_min, clipbox.y_min, clipbox.x_max, clipbox.y_max)
+                .map(tiny_skia::PathBuilder::from_rect)
+                .and_then(|path| path.transform(self.transform()));
         self.clip_to(rect);
     }
 

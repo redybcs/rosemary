@@ -552,8 +552,9 @@ fn say_no_tray() {
 /// `ROSEMARY_STATUS_ITEMS=0`: menu bar extras stay off the desktop's tray,
 /// for a launcher that keeps a tray icon of its own.
 fn status_items_shown() -> bool {
-    static SHOWN: std::sync::LazyLock<bool> =
-        std::sync::LazyLock::new(|| std::env::var_os("ROSEMARY_STATUS_ITEMS").is_none_or(|v| v != "0"));
+    static SHOWN: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        std::env::var_os("ROSEMARY_STATUS_ITEMS").is_none_or(|v| v != "0")
+    });
     *SHOWN
 }
 

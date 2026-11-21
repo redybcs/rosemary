@@ -170,7 +170,17 @@ pub fn pass_input(window: Window) -> bool {
         let supported = (x.shape_query)(display, &mut event, &mut error) != 0;
         if supported {
             // ShapeInput, no rectangles, ShapeSet.
-            (x.shape)(display, native as NativeWindow, 2, 0, 0, std::ptr::null(), 0, 0, 0);
+            (x.shape)(
+                display,
+                native as NativeWindow,
+                2,
+                0,
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                0,
+            );
         }
         (x.unlock)(display);
         supported

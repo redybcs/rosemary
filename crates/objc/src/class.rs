@@ -461,7 +461,9 @@ impl Class {
     pub fn count_inline(&self) {
         let size = self.instance_size();
         assert!(
-            self.is_registered() && size >= 2 * size_of::<usize>() && size % size_of::<usize>() == 0,
+            self.is_registered()
+                && size >= 2 * size_of::<usize>()
+                && size % size_of::<usize>() == 0,
             "{} cannot keep its count in its instances",
             self.name_str()
         );

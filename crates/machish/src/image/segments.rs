@@ -206,9 +206,8 @@ pub fn map_segments_from<S: MachSpec, M: AddressSpace>(
         // them, rather than mapped from the file in small ones: a game's code
         // is a hundred megabytes, and its main thread spent a measurable share
         // of its time walking page tables for instructions.
-        let huge = obj.spec().natively_executable()
-            && seg.prot().exec
-            && mem.advise_huge(addr, src.len());
+        let huge =
+            obj.spec().natively_executable() && seg.prot().exec && mem.advise_huge(addr, src.len());
         let mapped = match file {
             Some(f) if !huge => mem.map_file(addr, f.path, f.offset + range.start as u64, src)?,
             _ => 0,
