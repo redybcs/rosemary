@@ -89,6 +89,7 @@
           rosemary = release;
           rosemary-debug = rosemary "debug";
         } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          wpewebkit = pkgs.callPackage ./nix/wpewebkit.nix { };
           rosemary-launcher = portable.launcher;
           rosemary-fhs = portable.fhs;
           rosemary-bundle = portable.bundle;
@@ -116,7 +117,7 @@
           };
 
           runtimeLibs = [ pkgs.sdl3 pkgs.curl pkgs.zlib ]
-            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux ([
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
               pkgs.libglvnd
               pkgs.vulkan-loader
               # OpenAL: dlopened by the OpenAL.framework bridge.
@@ -126,10 +127,9 @@
               # NSStatusItem: SDL's tray dlopens an AppIndicator and GTK 3.
               pkgs.libayatana-appindicator
               pkgs.gtk3
-            ]
-            # webkit: loaded with dlopen, so it has to be on the library path.
-            # nixpkgs has no WPE WebKit yet.
-            ++ lib.optional (pkgs ? wpewebkit) pkgs.wpewebkit);
+              # webkit: loaded with dlopen, so it has to be on the library path.
+              (pkgs.callPackage ./nix/wpewebkit.nix { })
+            ];
         in {
           default = pkgs.mkShell {
             packages = [

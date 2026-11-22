@@ -11,8 +11,10 @@
 , libglvnd
 , vulkan-loader
 , openal
-  # nixpkgs has no WPE WebKit; without one, web views report it missing.
-, wpewebkit ? null
+, callPackage
+  # nixpkgs has no WPE WebKit, so it is built here. Null leaves web views
+  # without one; they then report it missing.
+, wpewebkit ? callPackage ./wpewebkit.nix { }
 , libxkbcommon
 , ffmpeg
 , wayland
