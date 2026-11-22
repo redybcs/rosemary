@@ -14,7 +14,7 @@
 , fhs
 , nixpkgsInfo ? null
   # Ship WPE WebKit, its helper processes and a TLS module for it. Without it,
-  # web views need the host's WPE WebKit 2.0.
+  # or when the package has none to ship, web views need the host's WPE WebKit 2.0.
 , withWebkit ? true
   # Sonames the code builds at run time, which no scan of the binary can see.
 , extraSonames ? [ ]
@@ -30,8 +30,9 @@ let
   gccLib = stdenv.cc.cc.lib;
 
   # package.nix declares what Rosemary links and dlopens; this is that list.
-  runtimeLibs = lib.filter (p: withWebkit || (p.pname or "") != "wpewebkit") rosemary.runtimeLibs;
   webkit = lib.findFirst (p: (p.pname or "") == "wpewebkit") null rosemary.runtimeLibs;
+  bundlesWebkit = withWebkit && webkit != null;
+  runtimeLibs = lib.filter (p: bundlesWebkit || (p.pname or "") != "wpewebkit") rosemary.runtimeLibs;
   webkitHelpers = "${webkit}/libexec/wpe-webkit-2.0";
 
   # WPE WebKit runs its helpers, bwrap and xdg-dbus-proxy from store paths fixed
@@ -106,10 +107,10 @@ let
   ];
   gstPackages = with gst_all_1; [ gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav ];
 
-  webkitExtras = lib.optionals withWebkit ([ relocate glib-networking bubblewrap xdg-dbus-proxy ] ++ gstPackages);
+  webkitExtras = lib.optionals bundlesWebkit ([ relocate glib-networking bubblewrap xdg-dbus-proxy ] ++ gstPackages);
   providers = runtimeLibs ++ [ gccLib ] ++ webkitExtras;
 
-  policy = import ./bundle/policy.nix { inherit withWebkit; };
+  policy = import ./bundle/policy.nix { withWebkit = bundlesWebkit; };
   metadata = import ./bundle/metadata.nix { inherit lib; } (providers ++ [ libc ]);
 
   config = writeText "rosemary-bundle.json" (builtins.toJSON ({
@@ -137,7 +138,7 @@ let
         "libanl.so.*" "libnss_files.so.*" "libnss_dns.so.*" "libmvec.so.*"
       ];
     };
-  } // lib.optionalAttrs withWebkit {
+  } // lib.optionalAttrs bundlesWebkit {
     extra_libraries = [
       { path = "${relocate}/lib/librosemary-webkit.so"; dest = "lib"; }
       # GIO loads every module in its directory, so this one gets its own.

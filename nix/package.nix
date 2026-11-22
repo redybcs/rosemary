@@ -11,7 +11,8 @@
 , libglvnd
 , vulkan-loader
 , openal
-, wpewebkit
+  # nixpkgs has no WPE WebKit; without one, web views report it missing.
+, wpewebkit ? null
 , libxkbcommon
 , ffmpeg
 , wayland
@@ -26,16 +27,15 @@ let
   # Everything here is dlopened by soname at runtime rather than linked, so the
   # linker never records it; it reaches the binary through RUNPATH instead.
   runtimeLibs = [ sdl3 curl zlib ]
-    ++ lib.optionals stdenv.hostPlatform.isLinux [
+    ++ lib.optionals stdenv.hostPlatform.isLinux ([
       libglvnd
       vulkan-loader
       openal
-      wpewebkit
       libxkbcommon
       wayland
       # libavcodec and libavutil, opened by soname for video.
       ffmpeg
-    ];
+    ] ++ lib.optional (wpewebkit != null) wpewebkit);
 
   # WPE WebKit's media pipelines. GStreamer looks for plugins only in its own
   # store path (core elements) unless told otherwise, and the web process

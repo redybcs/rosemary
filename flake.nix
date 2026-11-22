@@ -116,19 +116,20 @@
           };
 
           runtimeLibs = [ pkgs.sdl3 pkgs.curl pkgs.zlib ]
-            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux ([
               pkgs.libglvnd
               pkgs.vulkan-loader
               # OpenAL: dlopened by the OpenAL.framework bridge.
               pkgs.openal
-              # webkit: loaded with dlopen, so it has to be on the library path.
-              pkgs.wpewebkit
               # webkit: the compositor WPE WebKit's views are shown in.
               pkgs.libxkbcommon
               # NSStatusItem: SDL's tray dlopens an AppIndicator and GTK 3.
               pkgs.libayatana-appindicator
               pkgs.gtk3
-            ];
+            ]
+            # webkit: loaded with dlopen, so it has to be on the library path.
+            # nixpkgs has no WPE WebKit yet.
+            ++ lib.optional (pkgs ? wpewebkit) pkgs.wpewebkit);
         in {
           default = pkgs.mkShell {
             packages = [
