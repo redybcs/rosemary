@@ -1398,27 +1398,38 @@ fn set_cursor(surface: u32, name: Option<&'static str>) {
     }
 }
 
+/// The CSS cursor names AppKit has a cursor for, with that `NSCursor` class
+/// method; the arrow first, so an image two names share reads as the arrow.
+pub(crate) const CSS_CURSORS: &[(&str, &str)] = &[
+    ("default", "arrowCursor"),
+    ("pointer", "pointingHandCursor"),
+    ("text", "IBeamCursor"),
+    ("vertical-text", "IBeamCursorForVerticalLayout"),
+    ("crosshair", "crosshairCursor"),
+    ("cell", "crosshairCursor"),
+    ("grab", "openHandCursor"),
+    ("grabbing", "closedHandCursor"),
+    ("not-allowed", "operationNotAllowedCursor"),
+    ("no-drop", "operationNotAllowedCursor"),
+    ("copy", "dragCopyCursor"),
+    ("alias", "dragLinkCursor"),
+    ("context-menu", "contextualMenuCursor"),
+    ("col-resize", "resizeLeftRightCursor"),
+    ("ew-resize", "resizeLeftRightCursor"),
+    ("row-resize", "resizeUpDownCursor"),
+    ("ns-resize", "resizeUpDownCursor"),
+    ("e-resize", "resizeRightCursor"),
+    ("w-resize", "resizeLeftCursor"),
+    ("n-resize", "resizeUpCursor"),
+    ("s-resize", "resizeDownCursor"),
+];
+
 /// The `NSCursor` class method for a CSS cursor name.
 fn cursor_selector(name: &str) -> &'static str {
-    match name {
-        "pointer" => "pointingHandCursor",
-        "text" => "IBeamCursor",
-        "vertical-text" => "IBeamCursorForVerticalLayout",
-        "crosshair" | "cell" => "crosshairCursor",
-        "grab" => "openHandCursor",
-        "grabbing" => "closedHandCursor",
-        "not-allowed" | "no-drop" => "operationNotAllowedCursor",
-        "copy" => "dragCopyCursor",
-        "alias" => "dragLinkCursor",
-        "context-menu" => "contextualMenuCursor",
-        "col-resize" | "ew-resize" => "resizeLeftRightCursor",
-        "row-resize" | "ns-resize" => "resizeUpDownCursor",
-        "e-resize" => "resizeRightCursor",
-        "w-resize" => "resizeLeftCursor",
-        "n-resize" => "resizeUpCursor",
-        "s-resize" => "resizeDownCursor",
-        _ => "arrowCursor",
-    }
+    CSS_CURSORS
+        .iter()
+        .find(|(css, _)| *css == name)
+        .map_or("arrowCursor", |(_, selector)| selector)
 }
 
 /// `-resetCursorRects`: the whole view shows the cursor the page asked for.

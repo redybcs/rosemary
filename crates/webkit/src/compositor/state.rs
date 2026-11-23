@@ -158,6 +158,14 @@ pub struct State {
     swallowed: Vec<u32>,
     keyboard_window: Option<SurfaceId>,
     pointer_window: Option<SurfaceId>,
+    /// A window just given the keyboard, and the configure that activates it:
+    /// a press waits in `held` until the page acknowledges it, as WebKit drops
+    /// a click on a field that reaches the page before it knows it is focused.
+    activating: Option<(SurfaceId, Serial)>,
+    held: Vec<(u32, bool)>,
+    /// The surface WPE draws its cursor on, read again on each commit: WPE
+    /// sets the cursor before it attaches the new image.
+    cursor: Option<WlSurface>,
     start: Instant,
 }
 
@@ -370,6 +378,9 @@ impl State {
             swallowed: Vec::new(),
             keyboard_window: None,
             pointer_window: None,
+            activating: None,
+            held: Vec::new(),
+            cursor: None,
             start: Instant::now(),
         }
     }
@@ -541,8 +552,13 @@ impl State {
             Command::Focus { surface } => {
                 let old = std::mem::replace(&mut self.keyboard_window, surface);
                 self.focus_keyboard();
-                for window in [old, surface].into_iter().flatten() {
+                if let Some(window) = old {
                     self.configure(window);
+                }
+                if let Some(window) = surface
+                    && let Some(serial) = self.configure(window)
+                {
+                    self.activating = Some((window, serial));
                 }
             }
             Command::Offer { entries } => {
@@ -579,12 +595,11 @@ impl State {
         keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
     }
 
-    /// Send `window` its size, scale and states, once it has committed.
-    fn configure(&mut self, window: SurfaceId) {
+    /// Send `window` its size, scale and states, once it has committed; the
+    /// configure's serial when one went out.
+    fn configure(&mut self, window: SurfaceId) -> Option<Serial> {
         let focused = self.keyboard_window == Some(window);
-        let Some(entry) = self.windows.get(&window) else {
-            return;
-        };
+        let entry = self.windows.get(&window)?;
         let configure = entry.configure;
         let toplevel = entry.toplevel.clone();
         toplevel.with_pending_state(|state| {
@@ -614,9 +629,10 @@ impl State {
         if let Some(configure) = configure {
             set_scale(toplevel.wl_surface(), configure.scale);
         }
-        if toplevel.is_initial_configure_sent() {
-            toplevel.send_pending_configure();
+        if !toplevel.is_initial_configure_sent() {
+            return None;
         }
+        toplevel.send_pending_configure()
     }
 
     fn scale_of(&self, window: SurfaceId) -> Option<f64> {
@@ -662,6 +678,13 @@ impl State {
     }
 
     fn button(&mut self, button: u32, pressed: bool) {
+        if let Some((window, _)) = self.activating {
+            if self.windows.contains_key(&window) {
+                self.held.push((button, pressed));
+                return;
+            }
+            self.activating = None;
+        }
         if !pressed && let Some(at) = self.swallowed.iter().position(|b| *b == button) {
             self.swallowed.remove(at);
             return;
@@ -1148,6 +1171,40 @@ fn draw_tree(
     );
 }
 
+impl State {
+    fn show_cursor_image(&mut self) {
+        let (Some(surface), Some(cursor)) = (self.pointer_window, &self.cursor) else {
+            return;
+        };
+        if let Some(name) = cursor_name(cursor) {
+            lock(&self.shared.events).push(Event::Cursor { surface, name: Some(name) });
+        }
+    }
+}
+
+/// The CSS name of the theme cursor `surface` shows, from its committed image.
+fn cursor_name(surface: &WlSurface) -> Option<&'static str> {
+    with_states(surface, |states| {
+        let data = states.data_map.get::<RendererSurfaceStateUserData>()?;
+        let data = data.lock().ok()?;
+        with_buffer_contents(data.buffer()?, |pointer, length, info| {
+            let (width, height) = (info.width.max(0) as usize, info.height.max(0) as usize);
+            let (stride, offset) = (info.stride.max(0) as usize, info.offset.max(0) as usize);
+            if offset + stride * height > length || stride < width * 4 {
+                return None;
+            }
+            // SAFETY: the client's pool, `length` bytes long, checked above.
+            let pool = unsafe { std::slice::from_raw_parts(pointer, length) };
+            let pixels: Vec<u8> = (0..height)
+                .flat_map(|row| &pool[offset + row * stride..][..width * 4])
+                .copied()
+                .collect();
+            super::cursor_names::identify(width as u32, height as u32, &pixels)
+        })
+        .ok()?
+    })
+}
+
 fn draw_buffer(canvas: &mut Canvas, buffer: &wl_buffer::WlBuffer, from: Rect, to: Rect) {
     let _ = with_buffer_contents(buffer, |pointer, length, info| {
         let opaque = match info.format {
@@ -1229,6 +1286,9 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        if self.cursor.as_ref() == Some(surface) {
+            self.show_cursor_image();
+        }
         self.popups.commit(surface);
         if let Some(window) = self.windows.get(&id(surface))
             && !window.toplevel.is_initial_configure_sent()
@@ -1254,6 +1314,24 @@ impl CompositorHandler for State {
 impl XdgShellHandler for State {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg
+    }
+
+    fn ack_configure(&mut self, surface: WlSurface, configure: smithay::wayland::shell::xdg::Configure) {
+        use smithay::wayland::shell::xdg::Configure as Acked;
+        let Some((window, awaited)) = self.activating else {
+            return;
+        };
+        let acked = match configure {
+            Acked::Toplevel(configure) => configure.serial,
+            Acked::Popup(configure) => configure.serial,
+        };
+        if id(&surface) != window || acked < awaited {
+            return;
+        }
+        self.activating = None;
+        for (button, pressed) in std::mem::take(&mut self.held) {
+            self.button(button, pressed);
+        }
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
@@ -1353,16 +1431,19 @@ impl SeatHandler for State {
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
-        let Some(surface) = self.pointer_window else {
-            return;
-        };
+        self.cursor = None;
         let name = match image {
             CursorImageStatus::Hidden => None,
             CursorImageStatus::Named(icon) => Some(icon.name()),
-            // A cursor WPE draws itself; the nearest thing is the arrow.
-            CursorImageStatus::Surface(_) => Some("default"),
+            // WPE draws named cursors itself; the theme image says which.
+            CursorImageStatus::Surface(cursor) => {
+                self.cursor = Some(cursor);
+                return self.show_cursor_image();
+            }
         };
-        lock(&self.shared.events).push(Event::Cursor { surface, name });
+        if let Some(surface) = self.pointer_window {
+            lock(&self.shared.events).push(Event::Cursor { surface, name });
+        }
     }
 }
 

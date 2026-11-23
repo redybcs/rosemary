@@ -15,6 +15,8 @@
 
 mod composite;
 #[cfg(target_os = "linux")]
+mod cursor_names;
+#[cfg(target_os = "linux")]
 mod gpu;
 #[cfg(target_os = "linux")]
 mod monitor;

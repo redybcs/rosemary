@@ -1823,6 +1823,17 @@ impl Swapchain {
         {
             return Ok(ScenePrepared::SingleLayer);
         }
+        // A drawable smaller than its frame is enlarged once, into a frame-sized
+        // snapshot, so the upscaler does it and the blend draws it 1:1.
+        let source = if source.width < frame.width && source.height < frame.height {
+            PresentSource {
+                width: frame.width,
+                height: frame.height,
+                ..source
+            }
+        } else {
+            source
+        };
         if self.scene_blender.is_none() {
             self.scene_blender = Some(SceneBlender::new(self.gpu, self.window)?);
         }
@@ -2091,7 +2102,7 @@ impl Swapchain {
                     frame_extents(incoming.width, incoming.height),
                     snapshot,
                     vk::ImageLayout::GENERAL,
-                    frame_extents(incoming.width, incoming.height),
+                    frame_extents(current.snapshot.image.width, current.snapshot.image.height),
                 );
             }
         }

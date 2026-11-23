@@ -1639,6 +1639,29 @@ fn adopt_remembered(receiver: Id, style_mask: usize) -> Option<NSSize> {
     })
 }
 
+/// `ROSEMARY_WINDOW_ASPECT=W:H`, the width over height the main window keeps
+/// however it is resized.
+fn forced_aspect() -> Option<f32> {
+    static ASPECT: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    *ASPECT.get_or_init(|| {
+        let value = std::env::var("ROSEMARY_WINDOW_ASPECT").ok()?;
+        let (width, height) = value.split_once(':')?;
+        let (width, height): (f32, f32) = (width.trim().parse().ok()?, height.trim().parse().ok()?);
+        (width > 0.0 && height > 0.0).then(|| width / height)
+    })
+}
+
+/// Hold `sdl` to [`forced_aspect`], starting from the size it has now.
+fn lock_aspect(sdl: sdl3::Window) {
+    let Some(aspect) = forced_aspect() else {
+        return;
+    };
+    sdl3::video::set_window_aspect_ratio(sdl, aspect, aspect);
+    if let Some((width, _)) = sdl3::video::window_size(sdl) {
+        sdl3::video::set_window_size(sdl, width, (width as f32 / aspect).round() as i32);
+    }
+}
+
 /// Its saved state, once, as it is first shown.
 fn restore_remembered_mode(receiver: Id) {
     if !remembered::is(receiver)
@@ -1646,6 +1669,7 @@ fn restore_remembered_mode(receiver: Id) {
     {
         return;
     }
+    lock_aspect(window_of(receiver).sdl);
     let Some(saved) = remembered::saved() else {
         return;
     };
@@ -2034,6 +2058,9 @@ fn remake(receiver: Id, api: Api, want: Presentation) -> bool {
     destroy_sdl_window(old);
     update_text_input(receiver);
     trace!("{receiver:p} remade as {want:?} ({api:?})");
+    if remembered::is(receiver) && want == Presentation::Toplevel {
+        lock_aspect(new);
+    }
     if shown {
         sdl3::video::show_window(new);
         if want == Presentation::Toplevel {

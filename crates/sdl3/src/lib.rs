@@ -276,6 +276,7 @@ struct Api {
     SDL_MaximizeWindow: Option<unsafe extern "C" fn(Window) -> bool>,
     SDL_RestoreWindow: Option<unsafe extern "C" fn(Window) -> bool>,
     SDL_SetWindowMinimumSize: Option<unsafe extern "C" fn(Window, c_int, c_int) -> bool>,
+    SDL_SetWindowAspectRatio: Option<unsafe extern "C" fn(Window, f32, f32) -> bool>,
     SDL_ShowWindowSystemMenu: Option<unsafe extern "C" fn(Window, c_int, c_int) -> bool>,
     SDL_SetWindowHitTest:
         Option<unsafe extern "C" fn(Window, Option<video::HitTest>, *mut c_void) -> bool>,
@@ -535,6 +536,7 @@ fn api() -> Option<&'static Api> {
             SDL_MaximizeWindow,
             SDL_RestoreWindow,
             SDL_SetWindowMinimumSize,
+            SDL_SetWindowAspectRatio,
             SDL_ShowWindowSystemMenu,
             SDL_SetWindowHitTest,
             SDL_SetWindowAlwaysOnTop,
@@ -4107,6 +4109,16 @@ pub mod video {
         };
         // SAFETY: a window this crate created.
         unsafe { f(window, pixels(width), pixels(height)) }
+    }
+
+    /// `SDL_SetWindowAspectRatio`: the window keeps width over height within
+    /// `min..=max` as it is resized.
+    pub fn set_window_aspect_ratio(window: Window, min: f32, max: f32) -> bool {
+        let Some(f) = api().and_then(|a| a.SDL_SetWindowAspectRatio) else {
+            return false;
+        };
+        // SAFETY: a window this crate created.
+        unsafe { f(window, min, max) }
     }
 
     /// `SDL_ShowWindowSystemMenu`: the window manager's own menu for the
