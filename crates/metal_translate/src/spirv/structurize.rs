@@ -406,18 +406,15 @@ pub(super) fn split_shared_merges(function: &mut Function) -> Result<bool, Trans
             .copied()
             .filter(|source| dominators.dominates(header, *source))
             .collect();
-        if sources.is_empty() {
-            // Every arm of this header runs into blocks an enclosing condition
-            // shares: the `b` test of `(a && b) || c` reaches the outer true
-            // arm and the `c` test both. Give the header its own copy of what
-            // its arms reach before the merge, so its edges run through blocks
-            // it dominates and the next round can split the merge.
-            if isolate_header_paths(function, &graph, &dominators, &merges, header, merge)? {
-                return Ok(true);
-            }
-            return Err(emission(
-                "a selection merge has no incoming edge dominated by its header",
-            ));
+        // Every arm of this header runs into blocks an enclosing condition
+        // shares: the `b` test of `(a && b) || c` reaches the outer true arm
+        // and the `c` test both. Give the header its own copy of what its arms
+        // reach before the merge, so its edges run through blocks it dominates
+        // and the next round can split the merge.
+        if sources.is_empty()
+            && isolate_header_paths(function, &graph, &dominators, &merges, header, merge)?
+        {
+            return Ok(true);
         }
         // A path the header shares with another construct reaches the merge
         // through a block the header does not dominate. A new block on the

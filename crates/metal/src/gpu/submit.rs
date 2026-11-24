@@ -429,18 +429,7 @@ impl Gpu {
         let lock_timer = crate::stats::timer();
         let _commits = sdl3::compositor::guard();
         let _wsi = self.wsi.lock().expect("Vulkan WSI");
-        // The work queue first, which submits every commit before this
-        // present: the semaphore it waits on must have its signal submitted.
-        // With a present queue of its own, the work queue is let go before
-        // the driver call, so commits keep going while a present blocks.
-        let work = self.lock_queue();
-        let queue = match &self.present_queue {
-            Some(present) => {
-                drop(work);
-                present.lock().expect("Vulkan present queue")
-            }
-            None => work,
-        };
+        let queue = self.lock_queue();
         crate::stats::finish_timer(crate::stats::Counter::QueuePresentLockMicros, lock_timer);
         // SAFETY: the queue is held exclusively, every borrowed slice lives
         // across the call, and the image was acquired from this swapchain.
@@ -467,14 +456,7 @@ impl Gpu {
         let idle = {
             let queue = self.lock_queue();
             // SAFETY: the queue is held exclusively for the wait.
-            let work_idle = unsafe { self.device.queue_wait_idle(*queue) }.is_ok();
-            // A swapchain's semaphores are the present queue's too.
-            let present_idle = self.present_queue.as_ref().is_none_or(|present| {
-                let present = present.lock().expect("Vulkan present queue");
-                // SAFETY: held exclusively for the wait.
-                unsafe { self.device.queue_wait_idle(*present) }.is_ok()
-            });
-            work_idle && present_idle
+            unsafe { self.device.queue_wait_idle(*queue) }.is_ok()
         };
         if idle {
             // Submitted immediate commands are also complete now; release

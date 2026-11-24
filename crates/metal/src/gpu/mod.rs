@@ -129,13 +129,6 @@ pub struct Gpu {
     /// Vulkan requires external synchronization on a queue, and Metal lets any
     /// thread commit a command buffer.
     queue: Mutex<vk::Queue>,
-    /// A second queue of the same family, for presentation only, when the
-    /// family has one. It runs no commands: a present waits on the semaphore
-    /// the work queue signals, so it needs no hazard tracking, and the same
-    /// family means no ownership transfer of the image. With it, a present the
-    /// driver blocks in (FIFO waiting for a free image) no longer holds the
-    /// queue every commit needs.
-    present_queue: Option<Mutex<vk::Queue>>,
     /// Serialize driver WSI construction with presentation on the same GPU.
     /// Some ICDs do not tolerate concurrent VkSwapchain/semaphore creation
     /// and vkQueuePresentKHR for different windows on a shared device.
@@ -910,16 +903,10 @@ impl Gpu {
             })
             .flatten();
 
-        // Two queues of the family when it has them: the second presents.
-        let separate_present = families[queue_family as usize].queue_count >= 2;
-        let priorities: &[f32] = if separate_present {
-            &[1.0, 1.0]
-        } else {
-            &[1.0]
-        };
+        let priorities = [1.0f32];
         let queues = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family)
-            .queue_priorities(priorities)];
+            .queue_priorities(&priorities)];
         let device = create_device(
             instance,
             physical,
@@ -940,11 +927,8 @@ impl Gpu {
                 dynamic_raster,
             },
         )?;
-        // SAFETY: the family was requested above with one queue, or two.
+        // SAFETY: the family was requested above with one queue.
         let queue = unsafe { device.get_device_queue(queue_family, 0) };
-        // SAFETY: as above, index 1 only when two were requested.
-        let present_queue = separate_present
-            .then(|| Mutex::new(unsafe { device.get_device_queue(queue_family, 1) }));
         // SAFETY: the physical device belongs to this live instance.
         let memory = unsafe { instance.get_physical_device_memory_properties(physical) };
         let properties = unsafe { instance.get_physical_device_properties(physical) };
@@ -997,7 +981,6 @@ impl Gpu {
             physical,
             queue_family,
             queue: Mutex::new(queue),
-            present_queue,
             wsi: Mutex::new(()),
             commits: submit::Commits::default(),
             event_waits_in_flight: AtomicUsize::new(0),

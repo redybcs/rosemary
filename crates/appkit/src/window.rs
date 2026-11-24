@@ -1639,8 +1639,8 @@ fn adopt_remembered(receiver: Id, style_mask: usize) -> Option<NSSize> {
     })
 }
 
-/// `ROSEMARY_WINDOW_ASPECT=W:H`, the width over height the main window keeps
-/// however it is resized.
+/// `ROSEMARY_WINDOW_ASPECT=W:H`, the width over height every titled, resizable
+/// window keeps however it is resized.
 fn forced_aspect() -> Option<f32> {
     static ASPECT: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
     *ASPECT.get_or_init(|| {
@@ -1651,11 +1651,16 @@ fn forced_aspect() -> Option<f32> {
     })
 }
 
-/// Hold `sdl` to [`forced_aspect`], starting from the size it has now.
-fn lock_aspect(sdl: sdl3::Window) {
+/// Hold `receiver`'s window `sdl` to [`forced_aspect`] when it is titled and
+/// resizable, starting from the size it has now.
+fn lock_aspect(receiver: Id, sdl: sdl3::Window) {
     let Some(aspect) = forced_aspect() else {
         return;
     };
+    let wanted = style::TITLED | style::RESIZABLE;
+    if window_of(receiver).style_mask & wanted != wanted || sdl.is_null() {
+        return;
+    }
     sdl3::video::set_window_aspect_ratio(sdl, aspect, aspect);
     if let Some((width, _)) = sdl3::video::window_size(sdl) {
         sdl3::video::set_window_size(sdl, width, (width as f32 / aspect).round() as i32);
@@ -1669,7 +1674,6 @@ fn restore_remembered_mode(receiver: Id) {
     {
         return;
     }
-    lock_aspect(window_of(receiver).sdl);
     let Some(saved) = remembered::saved() else {
         return;
     };
@@ -2058,8 +2062,8 @@ fn remake(receiver: Id, api: Api, want: Presentation) -> bool {
     destroy_sdl_window(old);
     update_text_input(receiver);
     trace!("{receiver:p} remade as {want:?} ({api:?})");
-    if remembered::is(receiver) && want == Presentation::Toplevel {
-        lock_aspect(new);
+    if want == Presentation::Toplevel {
+        lock_aspect(receiver, new);
     }
     if shown {
         sdl3::video::show_window(new);
@@ -2816,6 +2820,9 @@ fn order_front(receiver: Id, make_key: bool) {
         false => sdl3::video::show_window_keeping_focus(sdl),
     };
     restore_remembered_mode(receiver);
+    if want == Presentation::Toplevel {
+        lock_aspect(receiver, window_of(receiver).sdl);
+    }
     if want == Presentation::Toplevel {
         // A popup cannot be raised - it is already above its parent, and SDL
         // refuses - and asking would only log a failure.

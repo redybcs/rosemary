@@ -2213,16 +2213,12 @@ pub fn apply_mouse_association() {
 
 /// `bool CGEventSourceKeyState(CGEventSourceStateID, CGKeyCode)`.
 ///
-/// False for every key. This asks the *window server* whether a key is down
-/// right now, independently of the event queue, and there is no window server
-/// here to ask - SDL's keyboard state is this process's own view and answers a
-/// different question, one that is wrong in exactly the case the call exists
-/// for (a key pressed while the program was not focused).
-///
-/// False rather than refused because the return type has no error value: a
-/// caller gets "not pressed", which is the answer for all but one key at any
-/// moment anyway.
+/// From SDL's keyboard state, the keys held while one of this process's
+/// windows has the keyboard: a game polls this to see whether a movement key
+/// is still down, and a constant "no" let go of it mid-step. A key held while
+/// no window here is focused reads as up, which the window server would not
+/// say, but SDL releases every key when focus leaves, so events agree.
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn CGEventSourceKeyState(_source: i32, _key: u16) -> u8 {
-    0
+pub unsafe extern "C" fn CGEventSourceKeyState(_source: i32, key: u16) -> u8 {
+    crate::keymap::scancode_of(key).is_some_and(sdl3::video::key_down) as u8
 }
