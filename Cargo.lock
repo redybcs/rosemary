@@ -2291,6 +2291,7 @@ dependencies = [
  "exports",
  "libc",
  "sdl3",
+ "starnix",
  "static_init",
 ]
 
