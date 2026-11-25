@@ -48,6 +48,10 @@ pub struct Window {
     /// Suppress reentrant toggles from fullscreen lifecycle callbacks: when
     /// the pending transition began, from [`transition_stamp`], or zero.
     fullscreen_transition: usize,
+    /// Full screen granted without the host, for a window that already covers
+    /// its display: gamescope's window manager advertises the state but never
+    /// sets it, so a request to it goes unanswered.
+    covering_fullscreen: usize,
     /// Expected SDL host geometry after a fullscreen transition. Some window
     /// managers queue its move/resize events after the state notification.
     fullscreen_announced_frame: NSRect,
@@ -1013,6 +1017,19 @@ fn inset_of(object: Id, style_mask: usize, fullscreen: bool) -> CGFloat {
 
 fn is_fullscreen(sdl: sdl3::Window) -> bool {
     !sdl.is_null() && sdl3::video::window_flags(sdl) & sdl3::video::flags::FULLSCREEN != 0
+}
+
+/// Whether the window already fills its whole display, so going full screen
+/// would change nothing that shows.
+fn covers_display(sdl: sdl3::Window) -> bool {
+    let (Some(display), Some((x, y)), Some((w, h))) = (
+        sdl3::video::display_for_window(sdl),
+        sdl3::video::window_position(sdl),
+        sdl3::video::window_size(sdl),
+    ) else {
+        return false;
+    };
+    sdl3::video::display_bounds(display).is_some_and(|b| (b.x, b.y, b.w, b.h) == (x, y, w, h))
 }
 
 /// Whether a shown fullscreen window covers `display`. Hidden and minimized
@@ -3738,7 +3755,25 @@ unsafe extern "C" fn toggle_full_screen(receiver: Id, _sel: Sel, _sender: Id) {
     );
     let live = window_of(receiver).sdl;
     let cancelled = live.is_null() || (was_shown && window_of(receiver).shown == 0);
-    if !cancelled && request_host_fullscreen(live, wanted) {
+    let covering = window_of(receiver).covering_fullscreen != 0;
+    if !cancelled && (wanted && !is_fullscreen(live) && covers_display(live) || !wanted && covering) {
+        let window = window_of(receiver);
+        window.covering_fullscreen = wanted as usize;
+        window.fullscreen = wanted as usize;
+        window.reported_fullscreen = wanted as usize;
+        window.fullscreen_transition = 0;
+        if !wanted {
+            window.fullscreen_restore = NSRect::default();
+        }
+        crate::event::post_for(
+            receiver,
+            if wanted {
+                DID_ENTER_FULL_SCREEN
+            } else {
+                DID_EXIT_FULL_SCREEN
+            },
+        );
+    } else if !cancelled && request_host_fullscreen(live, wanted) {
         window_of(receiver).fullscreen = wanted as usize;
         // SDL only records a hidden window's request; its state event comes
         // when the window is shown, and a toggle before then is a new request.
@@ -3832,7 +3867,8 @@ pub(crate) fn fullscreen_state_pending(receiver: Id) -> bool {
     if receiver.is_null() || window_of(receiver).sdl.is_null() {
         return false;
     }
-    is_fullscreen(window_of(receiver).sdl) != (window_of(receiver).reported_fullscreen != 0)
+    let window = window_of(receiver);
+    (is_fullscreen(window.sdl) || window.covering_fullscreen != 0) != (window.reported_fullscreen != 0)
 }
 
 /// Suppress the host's redundant post-transition event, not a later real move.
@@ -3872,7 +3908,7 @@ pub(crate) fn window_state_changed(receiver: Id) -> Option<&'static str> {
         return None;
     }
     let flags = sdl3::video::window_flags(window.sdl);
-    let fullscreen = flags & sdl3::video::flags::FULLSCREEN != 0;
+    let fullscreen = flags & sdl3::video::flags::FULLSCREEN != 0 || window.covering_fullscreen != 0;
     // Against what the guest was told, not what was asked: `-toggleFullScreen:`
     // records its request before the compositor acts on it, and comparing with
     // that would swallow the notification for every change the guest made.

@@ -100,6 +100,7 @@ unsafe extern "C" fn shared_application(class: Id, _sel: Sel) -> Id {
     // a guest can release is one it can make dangle.
     objc::arc::make_immortal(app);
     SHARED.store(app as usize, std::sync::atomic::Ordering::Release);
+    darwin::signal::set_termination_filter(request_termination);
     // SAFETY: the cell is this crate's own, and the guest reads it as `NSApp`.
     unsafe { *(crate::ns_app_cell() as *mut u64) = app as usize as u64 };
     register_application_fonts();
@@ -780,6 +781,30 @@ mod termination {
     pub const CANCELLED: usize = 3;
 }
 
+/// A `SIGTERM` waiting to become `-terminate:` on the next event pump.
+static TERMINATION_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A program with an application quits on `SIGTERM` as it does from its menu, as
+/// a Mac app is asked to quit before it is killed: the guest's own `SIGTERM`
+/// handler can tear it down from under its windows, which a launcher closing
+/// them (gamescope's, on its way out) has just taken. Async-signal-safe.
+fn request_termination() -> bool {
+    TERMINATION_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
+    true
+}
+
+/// Send `-terminate:` for a `SIGTERM` that arrived since the last call.
+pub(crate) fn terminate_if_requested() {
+    if !TERMINATION_REQUESTED.swap(false, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
+    let app = shared();
+    if !app.is_null() {
+        // SAFETY: the shared application, whose `-terminate:` is this crate's.
+        unsafe { terminate(app, objc::sel::get("terminate:"), std::ptr::null_mut()) };
+    }
+}
+
 /// `-terminate:`.
 unsafe extern "C" fn terminate(receiver: Id, _sel: Sel, _sender: Id) {
     // SAFETY: an application.
@@ -1141,7 +1166,13 @@ pub(crate) fn enqueue_input(event: Id) {
     if event.is_null() {
         return;
     }
-    posted_events().push_back(objc::arc::retain(event) as usize);
+    let mut queue = posted_events();
+    if let Some(merged) = queue.back().and_then(|&last| crate::nsevent::coalesced(last as Id, event)) {
+        objc::arc::release(queue.pop_back().expect("just seen") as Id);
+        queue.push_back(objc::arc::retain(merged) as usize);
+        return;
+    }
+    queue.push_back(objc::arc::retain(event) as usize);
 }
 
 /// Put events a tracking loop took back at the front of the queue, in their

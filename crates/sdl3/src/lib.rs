@@ -3615,6 +3615,7 @@ pub mod video {
             false => create_native_window(title, width, height, flags)?,
         };
         register_live_window(window, None);
+        quit_when_x11_server_goes(window);
         Some(window)
     }
 
@@ -4698,7 +4699,8 @@ pub mod video {
         }
     }
 
-    fn refresh_rate_override() -> Option<f32> {
+    /// `ROSEMARY_SCREEN_REFRESH_RATE`, the rate every display reports in place of its own.
+    pub fn refresh_rate_override() -> Option<f32> {
         static RATE: LazyLock<Option<f32>> = LazyLock::new(|| {
             let value = std::env::var("ROSEMARY_SCREEN_REFRESH_RATE").ok()?;
             match value.trim().parse::<f32>() {
@@ -5728,6 +5730,55 @@ pub mod video {
         (!display.is_null() && handle != 0).then_some((display, handle as u64))
     }
 
+    /// Xlib's default IO error handler calls `exit` once its server goes away -
+    /// gamescope's closing, say - which runs the guest's exit handlers under its
+    /// running threads, and Roblox's trap there; its own quit is no better, a
+    /// wait of seconds behind a launcher's window that stays until it ends. With
+    /// its display gone the program ends at once, as a Mac app does when its
+    /// window server dies.
+    #[cfg(target_os = "linux")]
+    fn quit_when_x11_server_goes(window: Window) {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        let Some((display, _)) = x11_native_window(window) else {
+            return;
+        };
+        unsafe extern "C" fn server_gone(_display: *mut c_void, _data: *mut c_void) {
+            // SAFETY: ends the process without running anyone's exit handlers.
+            unsafe { libc::_exit(0) };
+        }
+        ONCE.call_once(|| unsafe {
+            let x11 = libc::dlopen(c"libX11.so.6".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+            if x11.is_null() {
+                return;
+            }
+            // Since libX11 1.7; an older one keeps its `exit`.
+            let set = libc::dlsym(x11, c"XSetIOErrorExitHandler".as_ptr());
+            if set.is_null() {
+                return;
+            }
+            let set_io = libc::dlsym(x11, c"XSetIOErrorHandler".as_ptr());
+            if set_io.is_null() {
+                return;
+            }
+            type Handler = unsafe extern "C" fn(*mut c_void, *mut c_void);
+            type Set = unsafe extern "C" fn(*mut c_void, Option<Handler>, *mut c_void);
+            type IoHandler = unsafe extern "C" fn(*mut c_void) -> c_int;
+            type SetIo = unsafe extern "C" fn(Option<IoHandler>) -> Option<IoHandler>;
+            unsafe extern "C" fn connection_lost(_display: *mut c_void) -> c_int {
+                eprintln!("rosemary: the X server went away; ending");
+                0
+            }
+            let set: Set = std::mem::transmute(set);
+            let set_io: SetIo = std::mem::transmute(set_io);
+            // SAFETY: SDL's live display, and handlers that only log and queue an event.
+            set(display, Some(server_gone), std::ptr::null_mut());
+            set_io(Some(connection_lost));
+        });
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn quit_when_x11_server_goes(_window: Window) {}
+
     /// Whether `window`'s X server is Xwayland, which has the `XWAYLAND`
     /// extension: its pointer belongs to the Wayland compositor, so XFixes
     /// barriers do not hold it, and it locks the pointer only while no X
@@ -5870,6 +5921,9 @@ pub mod video {
     /// the call, which is a host too old for the mode rather than a failure to
     /// enter it.
     pub fn set_relative_mouse_mode(window: Window, enabled: bool) -> bool {
+        if std::env::var_os("ROSEMARY_TRACE_EVENT").is_some() {
+            eprintln!("rosemary: input: relative mouse mode {enabled} for window {window:p}");
+        }
         if let Some(done) = crate::desktop::set_relative_mouse_mode(window, enabled) {
             return done;
         }

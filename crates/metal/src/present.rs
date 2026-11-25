@@ -144,30 +144,29 @@ type DrawableCache = (std::sync::Mutex<Vec<Cached>>, std::sync::Condvar);
 static CACHE: DrawableCache = (std::sync::Mutex::new(Vec::new()), std::sync::Condvar::new());
 
 /// `-[CAMetalLayer nextDrawable]`.
-/// `ROSEMARY_BACKGROUND_FPS`, held where every frame passes whatever drives it
-/// - a display link, a timer or the program's own loop: while no window has
-/// focus, a drawable is handed out no sooner than the interval after the last.
-fn background_pace() {
+/// Held where every frame passes whatever drives it - a display link, a timer
+/// or the program's own loop: a drawable is handed out no sooner than the
+/// interval after the last. `ROSEMARY_SCREEN_REFRESH_RATE` sets one always, as
+/// a display at that rate would, and `ROSEMARY_BACKGROUND_FPS` one while no
+/// window has focus; the longer applies.
+fn pace() {
     static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-    let Some(interval) = appkit::event::background_interval() else {
+    let background = appkit::event::background_interval().filter(|_| !appkit::event::has_focus());
+    let refresh = sdl3::video::refresh_rate_override().map(|rate| 1.0 / f64::from(rate));
+    let Some(interval) = background.into_iter().chain(refresh).reduce(f64::max) else {
         return;
     };
-    let wait = {
-        let last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-        match (*last, appkit::event::has_focus()) {
-            (Some(at), false) => (at + std::time::Duration::from_secs_f64(interval))
-                .checked_duration_since(std::time::Instant::now()),
-            _ => None,
-        }
-    };
-    if let Some(wait) = wait {
+    let last = *LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(wait) = last.and_then(|at| {
+        (at + std::time::Duration::from_secs_f64(interval)).checked_duration_since(std::time::Instant::now())
+    }) {
         std::thread::sleep(wait);
     }
     *LAST.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
 }
 
 pub(crate) unsafe extern "C" fn next_drawable(receiver: Id, _sel: Sel) -> Id {
-    background_pace();
+    pace();
     let device = send_id(receiver, "device");
     let device = if device.is_null() {
         // SAFETY: called on the Metal framework's own thread.

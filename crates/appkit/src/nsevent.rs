@@ -339,6 +339,28 @@ pub fn fields_of(event: Id) -> Option<Fields> {
     })
 }
 
+/// One event for two queued motions of the same kind, window and modifiers, as
+/// AppKit's mouse coalescing gives: the newer's position with both deltas, so a
+/// slow frame takes one move instead of every one the mouse reported.
+pub(crate) fn coalesced(older: Id, newer: Id) -> Option<Id> {
+    let (old, new) = (fields_of(older)?, fields_of(newer)?);
+    let motion = matches!(
+        new.kind,
+        kind::MOUSE_MOVED | kind::LEFT_MOUSE_DRAGGED | kind::RIGHT_MOUSE_DRAGGED | kind::OTHER_MOUSE_DRAGGED
+    );
+    if !motion
+        || old.kind != new.kind
+        || old.window != new.window
+        || old.modifiers != new.modifiers
+        || old.button != new.button
+        || old.tracking_area != new.tracking_area
+    {
+        return None;
+    }
+    let delta = NSPoint { x: old.delta.x + new.delta.x, y: old.delta.y + new.delta.y };
+    Some(make(Fields { delta, ..new }))
+}
+
 /// The tracking area an enter, exit or cursor-update event is about, or null.
 pub fn tracking_area_of(event: Id) -> Id {
     // SAFETY: null or a live object this runtime allocated.
@@ -700,6 +722,28 @@ mod tests {
                 NSPoint { x: 3.0, y: 4.0 }
             );
         }
+    }
+
+    #[test]
+    fn queued_motions_of_one_kind_merge_with_their_deltas_summed() {
+        crate::bootstrap();
+        let drag = |x: f64, dx: f64| {
+            make(Fields {
+                kind: kind::RIGHT_MOUSE_DRAGGED,
+                button: 1,
+                location: NSPoint { x, y: 0.0 },
+                delta: NSPoint { x: dx, y: 1.0 },
+                ..Fields::default()
+            })
+        };
+        let merged = fields_of(coalesced(drag(1.0, 2.0), drag(5.0, 3.0)).unwrap()).unwrap();
+        assert_eq!(merged.location, NSPoint { x: 5.0, y: 0.0 });
+        assert_eq!(merged.delta, NSPoint { x: 5.0, y: 2.0 });
+
+        let moved = make(Fields { kind: kind::MOUSE_MOVED, ..Fields::default() });
+        assert!(coalesced(drag(1.0, 2.0), moved).is_none(), "a different kind keeps its place");
+        let key = make(Fields { kind: kind::KEY_DOWN, ..Fields::default() });
+        assert!(coalesced(key, make(Fields { kind: kind::KEY_DOWN, ..Fields::default() })).is_none());
     }
 
     /// Shift and Option change what a key types; Command does not, and a

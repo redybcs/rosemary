@@ -55,6 +55,7 @@ pub fn pump(app: Id) -> bool {
         deliver(event);
     }
     note_focus();
+    crate::application::terminate_if_requested();
     sdl3::pointer::service();
     service_presentation();
     // General pump hooks may run guest code and are not modal-safe.
@@ -336,6 +337,9 @@ pub(crate) fn deliver(event: sdl3::video::Event) {
 /// back, and the loop would never wait for input again.
 pub(crate) fn deliver_past_modal(event: sdl3::video::Event) {
     use sdl3::video::Event;
+    if tracing() && !matches!(event, Event::MouseMotion { .. }) {
+        eprintln!("rosemary: input: {:.1}ms host {event:?}", trace_ms());
+    }
     if crate::dialog::deliver(&event) {
         key_withheld(&event);
         return;
@@ -598,7 +602,7 @@ pub(crate) fn deliver_past_modal(event: sdl3::video::Event) {
                     (false, false) => kind::KEY_UP,
                 },
                 modifiers: crate::keymap::modifiers(modifiers) | crate::keymap::key_flags(scancode),
-                key_code: crate::keymap::virtual_key(scancode),
+                key_code: crate::keymap::key_code(scancode, key, modifiers),
                 characters: objc::arc::autorelease(foundation::string::from_str(&text)),
                 repeat,
                 window,
@@ -1000,6 +1004,9 @@ pub(crate) fn key_withheld(event: &sdl3::video::Event) {
     else {
         return;
     };
+    if tracing() {
+        eprintln!("rosemary: input: {:.1}ms withheld key scancode {scancode} down {down}", trace_ms());
+    }
     if matches!(
         crate::keymap::edit_chord_step(scancode, modifiers, down),
         ChordStep::Leave | ChordStep::EndAfter
@@ -1492,8 +1499,15 @@ pub fn route(window: Id, event: Id) {
     if tracing() {
         // SAFETY: a live object this runtime allocated.
         let class = unsafe { objc::object::class_of(responder) };
+        let key = match kind {
+            kind::KEY_DOWN | kind::KEY_UP | kind::FLAGS_CHANGED => nsevent::fields_of(event).map_or_else(String::new, |f| {
+                format!(", key {:#04x}{}", f.key_code, if f.repeat { " repeat" } else { "" })
+            }),
+            _ => String::new(),
+        };
         eprintln!(
-            "rosemary: appkit: -{selector} to {responder:p} ({})",
+            "rosemary: appkit: {:.1}ms -{selector} to {responder:p} ({}){key}",
+            trace_ms(),
             class.map_or("no class", |c| c.name_str()),
         );
     }
@@ -1904,6 +1918,13 @@ pub const TRACE_ENV: &str = "ROSEMARY_TRACE_EVENT";
 pub(crate) fn tracing() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os(TRACE_ENV).is_some())
+}
+
+/// Milliseconds on one clock for every input trace line, so their order holds
+/// whatever buffers the program's own log.
+pub(crate) fn trace_ms() -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.0
 }
 
 fn post(id: u32, name: &str) {

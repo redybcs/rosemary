@@ -45,7 +45,20 @@ pub(crate) fn allows(event: Id) -> bool {
     for block in taking {
         // SAFETY: a block literal of `NSEvent *(^)(NSEvent *)`, whose `invoke`
         // the `@?` in the method encoding has already made callable.
-        allowed &= !unsafe { call(block as Id, event) }.is_null();
+        let answer = unsafe { call(block as Id, event) };
+        if crate::event::tracing() {
+            let key = crate::nsevent::fields_of(event).map_or(0, |f| f.key_code);
+            eprintln!(
+                "rosemary: input: {:.1}ms local monitor for event type {kind} key {key:#04x}: {}",
+                crate::event::trace_ms(),
+                match answer {
+                    a if a.is_null() => "swallowed",
+                    a if a == event => "passed",
+                    _ => "replaced (the original is sent)",
+                }
+            );
+        }
+        allowed &= !answer.is_null();
         objc::block::release(block as Id);
     }
     allowed

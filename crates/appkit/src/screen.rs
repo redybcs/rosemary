@@ -2220,5 +2220,20 @@ pub fn apply_mouse_association() {
 /// say, but SDL releases every key when focus leaves, so events agree.
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn CGEventSourceKeyState(_source: i32, key: u16) -> u8 {
-    crate::keymap::scancode_of(key).is_some_and(sdl3::video::key_down) as u8
+    let down = crate::keymap::scancode_of(key).is_some_and(sdl3::video::key_down);
+    if crate::event::tracing() {
+        // Only changes: a game asks about its keys every frame.
+        static LAST: [std::sync::atomic::AtomicBool; 128] =
+            [const { std::sync::atomic::AtomicBool::new(false) }; 128];
+        if let Some(last) = LAST.get(usize::from(key))
+            && last.swap(down, std::sync::atomic::Ordering::Relaxed) != down
+        {
+            eprintln!(
+                "rosemary: input: {:.1}ms CGEventSourceKeyState key {key:#04x} now {}",
+                crate::event::trace_ms(),
+                if down { "down" } else { "up" }
+            );
+        }
+    }
+    down as u8
 }

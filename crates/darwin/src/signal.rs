@@ -825,6 +825,30 @@ pub fn set_fault_filter(filter: fn(c_int, *mut libc::siginfo_t) -> bool) {
     FAULT_FILTER.store(filter as usize, Ordering::Release);
 }
 
+/// A host `SIGTERM` the runtime turns into a quit of its own, asked before any
+/// guest handler sees it. Zero when unset.
+static TERMINATION_FILTER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Have [`deliver`] ask `filter` about every `SIGTERM` first, and return without
+/// delivering when it answers true. `filter` must be async-signal-safe.
+pub fn set_termination_filter(filter: fn() -> bool) {
+    TERMINATION_FILTER.store(filter as usize, Ordering::Release);
+}
+
+fn termination_filtered(host: c_int) -> bool {
+    if host != libc::SIGTERM {
+        return false;
+    }
+    match TERMINATION_FILTER.load(Ordering::Acquire) {
+        0 => false,
+        f => {
+            // SAFETY: only ever stored from a `fn() -> bool` by `set_termination_filter`.
+            let filter = unsafe { core::mem::transmute::<usize, fn() -> bool>(f) };
+            filter()
+        }
+    }
+}
+
 fn filtered(host: c_int, info: *mut libc::siginfo_t) -> bool {
     if host != libc::SIGSEGV && host != libc::SIGBUS {
         return false;
@@ -844,7 +868,7 @@ fn filtered(host: c_int, info: *mut libc::siginfo_t) -> bool {
 /// an `SA_SIGINFO` handler both structures, rebuilt in Darwin's numbering and
 /// layout. Async-signal-safe: no allocation, no locks.
 extern "C" fn deliver(host: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
-    if filtered(host, info) {
+    if filtered(host, info) || termination_filtered(host) {
         return;
     }
     let Some(darwin) = signal_from_host(host) else {
