@@ -740,6 +740,7 @@ fn a_resource_answers_the_device_that_made_it() {
             array_length: 1,
             storage_mode: 0,
             usage: gpu::USAGE_SHADER_READ,
+            swizzle: Default::default(),
         },
     );
     assert!(!texture.is_null());
