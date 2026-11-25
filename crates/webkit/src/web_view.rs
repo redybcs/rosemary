@@ -14,6 +14,8 @@ use crate::engine::{self, Block, Engine, HostBlock};
 use crate::wpe::{self, Ptr};
 use crate::{clipboard, configuration, keys, send};
 
+pub(crate) mod bridged;
+
 /// What WebKit on macOS sends; with Studio's application name appended, as
 /// `applicationNameForUserAgent` appends it. Sites choose their Mac layout, and
 /// their Studio-specific paths, by this.
@@ -50,6 +52,8 @@ struct View {
     custom_user_agent: Option<String>,
     /// `-pageZoom`, the scale of the whole page.
     page_zoom: f64,
+    /// Set for a view the bridge shows, which has no `page`.
+    bridged: Option<bridged::Page>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -288,6 +292,10 @@ pub(crate) fn script_message(manager: usize, name: &str, body: Id) -> Id {
         },
         _ => String::new(),
     };
+    message_object(object as Id, &url, name, body)
+}
+
+fn message_object(object: Id, url: &str, name: &str, body: Id) -> Id {
     let body = match body.is_null() {
         // A page that posts `null` or `undefined`, which WebKit hands over as
         // `NSNull`.
@@ -302,7 +310,7 @@ pub(crate) fn script_message(manager: usize, name: &str, body: Id) -> Id {
         message_class(),
         ScriptMessage {
             name: name.to_string(),
-            objects: Owned::new(&[body, object as Id, frame_info(&guest_url(&url), true)]),
+            objects: Owned::new(&[body, object, frame_info(&guest_url(url), true)]),
         },
     )
 }
@@ -500,15 +508,19 @@ unsafe fn navigation_action(engine: &Engine, page: Ptr, action: Ptr, new_window:
     autoreleased(
         action_class(),
         NavigationAction {
-            // WPE WebKit counts `OTHER` as 5; WebKit's `WKNavigationTypeOther`
-            // is -1. The rest are the same.
-            navigation_type: match kind {
-                0..=4 => kind as isize,
-                _ => -1,
-            },
+            navigation_type: navigation_type(i64::from(kind)),
             objects: Owned::new(&objects),
         },
     )
+}
+
+/// WPE WebKit counts `OTHER` as 5; WebKit's `WKNavigationTypeOther` is -1. The
+/// rest are the same.
+fn navigation_type(kind: i64) -> isize {
+    match kind {
+        0..=4 => kind as isize,
+        _ => -1,
+    }
 }
 
 fn new_navigation() -> Id {
@@ -691,18 +703,22 @@ unsafe extern "C" fn load_changed(page: Ptr, event: c_int, data: Ptr) {
         let url = unsafe { wpe::text((engine.api.webkit_web_view_get_uri)(page)) };
         eprintln!("rosemary: webkit: load event {event} for {url}");
     }
+    load_event(&view, id, event);
+}
+
+fn load_event(view: &Delegates, id: usize, event: c_int) {
     match event {
-        wpe::LOAD_STARTED => notify(&view, id, "webView:didStartProvisionalNavigation:"),
+        wpe::LOAD_STARTED => notify(view, id, "webView:didStartProvisionalNavigation:"),
         wpe::LOAD_COMMITTED => {
             answer_held_frames(id);
-            notify(&view, id, "webView:didCommitNavigation:");
+            notify(view, id, "webView:didCommitNavigation:");
         }
         wpe::LOAD_FINISHED => {
-            notify(&view, id, "webView:didFinishNavigation:");
+            notify(view, id, "webView:didFinishNavigation:");
             finish_navigation(id);
         }
         _ => notify(
-            &view,
+            view,
             id,
             "webView:didReceiveServerRedirectForProvisionalNavigation:",
         ),
@@ -730,16 +746,29 @@ unsafe extern "C" fn load_failed(
         )
     };
     eprintln!("rosemary: webkit: loading {url} failed: {message} ({domain} {code})");
+    let provisional = event == wpe::LOAD_STARTED || event == 1;
+    report_load_failure(&view, id, provisional, &domain, code, &message);
+    // Handled: WKWebView shows no error page of its own.
+    1
+}
+
+fn report_load_failure(
+    view: &Delegates,
+    id: usize,
+    provisional: bool,
+    domain: &str,
+    code: c_int,
+    message: &str,
+) {
     // WebKit reports a network failure in Foundation's URL error domain, and
     // what it decided itself in its own.
-    let (domain, code) = match domain.as_str() {
+    let (domain, code) = match domain {
         "WebKitNetworkError" if code == wpe::NETWORK_ERROR_CANCELLED => ("NSURLErrorDomain", -999),
         "WebKitNetworkError" => ("NSURLErrorDomain", -1),
         "WebKitPolicyError" => ("WebKitErrorDomain", i64::from(code)),
         _ => ("NSURLErrorDomain", -1),
     };
-    let error = foundation::error::make(domain, code, &message);
-    let provisional = event == wpe::LOAD_STARTED || event == 1;
+    let error = foundation::error::make(domain, code, message);
     let selector = match provisional {
         true => "webView:didFailProvisionalNavigation:withError:",
         false => "webView:didFailNavigation:withError:",
@@ -760,8 +789,6 @@ unsafe extern "C" fn load_failed(
         }
     }
     finish_navigation(id);
-    // Handled: WKWebView shows no error page of its own.
-    1
 }
 
 /// A commit may hand the page to a new web process, which draws at once. WPE
@@ -790,9 +817,12 @@ fn answer_held_frames(id: usize) {
 unsafe extern "C" fn web_process_terminated(_page: Ptr, reason: c_int, data: Ptr) {
     eprintln!("rosemary: webkit: the web process terminated (reason {reason})");
     answer_held_frames(data as usize);
-    let Some(view) = delegates(data as usize) else {
-        return;
-    };
+    if let Some(view) = delegates(data as usize) {
+        content_process_terminated(&view);
+    }
+}
+
+fn content_process_terminated(view: &Delegates) {
     const SELECTOR: &str = "webViewWebContentProcessDidTerminate:";
     if engine::responds(view.navigation, SELECTOR) {
         // SAFETY: the delegate answers the selector.
@@ -814,6 +844,15 @@ unsafe extern "C" fn create(page: Ptr, action: Ptr, data: Ptr) -> Ptr {
     if engine::responds(view.ui, SELECTOR) {
         // SAFETY: the action is live for the signal's duration.
         let action = unsafe { navigation_action(engine, page, action, true) };
+        ask_for_new_window(&view, action);
+    }
+    std::ptr::null_mut()
+}
+
+fn ask_for_new_window(view: &Delegates, action: Id) {
+    const SELECTOR: &str =
+        "webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:";
+    if engine::responds(view.ui, SELECTOR) {
         let features = objc::arc::autorelease(objc::object::create_instance(
             objc::class::lookup(c"WKWindowFeatures").expect("registered during bootstrap"),
             0,
@@ -827,7 +866,6 @@ unsafe extern "C" fn create(page: Ptr, action: Ptr, data: Ptr) -> Ptr {
             engine::warn_once("a web view made for a new window is not connected to its opener");
         }
     }
-    std::ptr::null_mut()
 }
 
 pub(crate) fn connect(
@@ -1191,7 +1229,11 @@ unsafe extern "C" fn init_with_frame_configuration(
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let mut page = std::ptr::null_mut();
     let mut surface = None;
-    if let Some(engine) = engine::get() {
+    // WebKit1's view is built on this one's WebKit page, so it stays.
+    let bridge = crate::bridge::get().filter(|_| !crate::legacy::is_web_view(receiver));
+    if bridge.is_none()
+        && let Some(engine) = engine::get()
+    {
         // SAFETY: a configuration, made or retained above.
         page = unsafe { make_page(engine, configuration, id) };
         if !page.is_null() {
@@ -1223,6 +1265,7 @@ unsafe extern "C" fn init_with_frame_configuration(
             cursor: None,
             custom_user_agent: None,
             page_zoom: DEFAULT_PAGE_ZOOM,
+            bridged: bridge.map(|_| bridged::Page::default()),
         })
     });
     receiver
@@ -1273,6 +1316,11 @@ fn forget(object: Id) {
         return;
     };
     appkit::backing::remove_overlay(object);
+    if view.bridged.is_some()
+        && let Some(bridge) = crate::bridge::get()
+    {
+        bridged::command(bridge, view.id, "close");
+    }
     if view.page != 0
         && let Some(engine) = engine::get()
     {
@@ -1624,12 +1672,15 @@ unsafe extern "C" fn load_request(receiver: Id, _sel: Sel, request: Id) -> Id {
         return std::ptr::null_mut();
     };
     eprintln!("rosemary: webkit: loading {url}");
-    let Some((engine, page)) = page_of(receiver) else {
-        return std::ptr::null_mut();
-    };
     if method != "GET" {
         engine::warn_once("a request's method is not sent; it is loaded as a GET");
     }
+    if let Some((bridge, id)) = bridged::of(receiver) {
+        return bridged::load(bridge, receiver, id, &url, &headers);
+    }
+    let Some((engine, page)) = page_of(receiver) else {
+        return std::ptr::null_mut();
+    };
     let navigation = start_navigation(receiver);
     let url = wpe::c_string(&host_url(&url));
     // SAFETY: the request copies the URI and owns its borrowed headers.
@@ -1679,6 +1730,9 @@ fn file_within_access(file: &std::path::Path, root: &std::path::Path) -> bool {
 }
 
 unsafe extern "C" fn can_go_back(receiver: Id, _sel: Sel) -> u8 {
+    if let Some((_, id)) = bridged::of(receiver) {
+        return u8::from(bridged::can_go_back(id));
+    }
     // SAFETY: the view's widget.
     page_of(receiver).is_some_and(|(engine, page)| unsafe {
         (engine.api.webkit_web_view_can_go_back)(page) != 0
@@ -1686,6 +1740,9 @@ unsafe extern "C" fn can_go_back(receiver: Id, _sel: Sel) -> u8 {
 }
 
 unsafe extern "C" fn can_go_forward(receiver: Id, _sel: Sel) -> u8 {
+    if let Some((_, id)) = bridged::of(receiver) {
+        return u8::from(bridged::can_go_forward(id));
+    }
     // SAFETY: the view's widget.
     page_of(receiver).is_some_and(|(engine, page)| unsafe {
         (engine.api.webkit_web_view_can_go_forward)(page) != 0
@@ -1698,6 +1755,10 @@ unsafe extern "C" fn go_back(receiver: Id, sel: Sel) -> Id {
     if unsafe { can_go_back(receiver, sel) } == 0 {
         return std::ptr::null_mut();
     }
+    if let Some((bridge, id)) = bridged::of(receiver) {
+        bridged::command(bridge, id, "back");
+        return start_navigation(receiver);
+    }
     let Some((engine, page)) = page_of(receiver) else {
         return std::ptr::null_mut();
     };
@@ -1709,6 +1770,10 @@ unsafe extern "C" fn go_forward(receiver: Id, sel: Sel) -> Id {
     // SAFETY: as `can_go_forward`.
     if unsafe { can_go_forward(receiver, sel) } == 0 {
         return std::ptr::null_mut();
+    }
+    if let Some((bridge, id)) = bridged::of(receiver) {
+        bridged::command(bridge, id, "forward");
+        return start_navigation(receiver);
     }
     let Some((engine, page)) = page_of(receiver) else {
         return std::ptr::null_mut();
@@ -1741,6 +1806,10 @@ unsafe extern "C" fn go_forward_action(receiver: Id, sel: Sel, _sender: Id) {
 }
 
 unsafe extern "C" fn stop_loading(receiver: Id, _sel: Sel) {
+    if let Some((bridge, id)) = bridged::of(receiver) {
+        bridged::command(bridge, id, "stop");
+        return;
+    }
     if let Some((engine, page)) = page_of(receiver) {
         // SAFETY: the view's widget.
         unsafe { (engine.api.webkit_web_view_stop_loading)(page) };
@@ -1748,11 +1817,14 @@ unsafe extern "C" fn stop_loading(receiver: Id, _sel: Sel) {
 }
 
 unsafe extern "C" fn url(receiver: Id, _sel: Sel) -> Id {
-    let Some((engine, page)) = page_of(receiver) else {
-        return std::ptr::null_mut();
+    let text = if let Some((_, id)) = bridged::of(receiver) {
+        bridged::url_of(id)
+    } else if let Some((engine, page)) = page_of(receiver) {
+        // SAFETY: the view's widget; the string is the view's.
+        unsafe { wpe::text((engine.api.webkit_web_view_get_uri)(page)) }
+    } else {
+        String::new()
     };
-    // SAFETY: the view's widget; the string is the view's.
-    let text = unsafe { wpe::text((engine.api.webkit_web_view_get_uri)(page)) };
     if text.is_empty() {
         return std::ptr::null_mut();
     }
@@ -1828,6 +1900,10 @@ unsafe extern "C" fn javascript_ready(source: Ptr, result: Ptr, data: Ptr) {
 
 unsafe extern "C" fn evaluate_javascript(receiver: Id, _sel: Sel, script: Id, completion: Id) {
     let completion = Block::copy(completion);
+    if let Some((bridge, id)) = bridged::of(receiver) {
+        bridged::evaluate(bridge, id, &engine::text_of(script), completion);
+        return;
+    }
     let Some((engine, page)) = page_of(receiver) else {
         if let Some(completion) = completion {
             engine::defer(move || {

@@ -35,6 +35,8 @@ pub struct Controller {
     /// The user agent page scripts are shown, where WPE WebKit is sent a
     /// respelling of it; see [`crate::web_view::header_user_agent`].
     page_user_agent: Option<String>,
+    /// Counts changes to the scripts and handlers, for a bridged view to send.
+    revision: u64,
 }
 
 impl Drop for Controller {
@@ -359,25 +361,21 @@ fn add_to_manager(engine: &Engine, manager: Ptr, script: &Script) {
     }
 }
 
-/// Make page scripts see `agent` as `navigator.userAgent`, in every frame
-/// from before the page's own scripts run, with the Mac platform it names:
-/// WPE answers `navigator.platform` from the host's `uname`.
-fn add_user_agent_override(engine: &Engine, manager: Ptr, agent: &str) {
+/// The script that makes page scripts see `agent` as `navigator.userAgent`, in
+/// every frame from before the page's own scripts run, with the Mac platform
+/// it names: WPE answers `navigator.platform` from the host's `uname`.
+pub fn user_agent_override(agent: &str) -> Script {
     let source = format!(
         "(() => {{ const agent = {}; \
          for (const [key, value] of [['userAgent', agent], ['appVersion', agent.replace(/^Mozilla\\//, '')], ['platform', 'MacIntel']]) \
          Object.defineProperty(Navigator.prototype, key, {{ get() {{ return value; }}, configurable: true }}); }})();",
         crate::js::quote(agent)
     );
-    add_to_manager(
-        engine,
-        manager,
-        &Script {
-            source,
-            at_document_start: true,
-            main_frame_only: false,
-        },
-    );
+    Script {
+        source,
+        at_document_start: true,
+        main_frame_only: false,
+    }
 }
 
 /// Put back every script a controller's manager should have: this port's own,
@@ -387,7 +385,7 @@ fn rebuild_scripts(engine: &Engine, controller: &Controller) {
     // SAFETY: the controller's own manager.
     unsafe { (engine.api.webkit_user_content_manager_remove_all_scripts)(manager) };
     if let Some(agent) = &controller.page_user_agent {
-        add_user_agent_override(engine, manager, agent);
+        add_to_manager(engine, manager, &user_agent_override(agent));
     }
     for script in &controller.scripts {
         add_to_manager(engine, manager, script);
@@ -419,6 +417,42 @@ pub unsafe fn manager(object: Id, engine: &Engine) -> Ptr {
         });
     }
     controller.manager as Ptr
+}
+
+/// # Safety
+///
+/// `object` must be a content controller.
+pub unsafe fn revision(object: Id) -> u64 {
+    unsafe { controller(object) }.map_or(0, |c| c.revision)
+}
+
+/// The guest's scripts, in the order it added them.
+///
+/// # Safety
+///
+/// `object` must be a content controller.
+pub unsafe fn scripts(object: Id) -> Vec<Script> {
+    unsafe { controller(object) }.map_or_else(Vec::new, |c| c.scripts.clone())
+}
+
+/// # Safety
+///
+/// `object` must be a content controller.
+pub unsafe fn handler_names(object: Id) -> Vec<String> {
+    unsafe { controller(object) }.map_or_else(Vec::new, |c| {
+        c.handlers.iter().map(|(name, _)| name.clone()).collect()
+    })
+}
+
+/// # Safety
+///
+/// `object` must be a content controller.
+pub unsafe fn handler_named(object: Id, name: &str) -> Option<Id> {
+    unsafe { controller(object) }?
+        .handlers
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, handler)| *handler as Id)
 }
 
 /// The manager a configuration's views share, if one has been made.
@@ -463,6 +497,7 @@ unsafe extern "C" fn add_user_script(receiver: Id, _sel: Sel, user_script: Id) {
         );
     }
     controller.scripts.push(user_script.clone());
+    controller.revision += 1;
     if controller.manager != 0
         && let Some(engine) = engine::get()
     {
@@ -476,6 +511,7 @@ unsafe extern "C" fn remove_all_user_scripts(receiver: Id, _sel: Sel) {
         return;
     };
     controller.scripts.clear();
+    controller.revision += 1;
     if controller.manager != 0
         && let Some(engine) = engine::get()
     {
@@ -514,6 +550,7 @@ unsafe extern "C" fn add_script_message_handler(receiver: Id, _sel: Sel, handler
         return;
     }
     let handler = objc::arc::retain(handler) as usize;
+    controller.revision += 1;
     match controller.handlers.iter_mut().find(|(n, _)| *n == name) {
         Some((_, old)) => objc::arc::release(std::mem::replace(old, handler) as Id),
         None => {
@@ -537,6 +574,7 @@ unsafe extern "C" fn remove_script_message_handler(receiver: Id, _sel: Sel, name
         return;
     };
     let (_, handler) = controller.handlers.remove(at);
+    controller.revision += 1;
     objc::arc::release(handler as Id);
     if controller.manager != 0
         && let Some(engine) = engine::get()
