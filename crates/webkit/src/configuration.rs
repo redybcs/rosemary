@@ -360,11 +360,12 @@ fn add_to_manager(engine: &Engine, manager: Ptr, script: &Script) {
 }
 
 /// Make page scripts see `agent` as `navigator.userAgent`, in every frame
-/// from before the page's own scripts run.
+/// from before the page's own scripts run, with the Mac platform it names:
+/// WPE answers `navigator.platform` from the host's `uname`.
 fn add_user_agent_override(engine: &Engine, manager: Ptr, agent: &str) {
     let source = format!(
         "(() => {{ const agent = {}; \
-         for (const [key, value] of [['userAgent', agent], ['appVersion', agent.replace(/^Mozilla\\//, '')]]) \
+         for (const [key, value] of [['userAgent', agent], ['appVersion', agent.replace(/^Mozilla\\//, '')], ['platform', 'MacIntel']]) \
          Object.defineProperty(Navigator.prototype, key, {{ get() {{ return value; }}, configurable: true }}); }})();",
         crate::js::quote(agent)
     );

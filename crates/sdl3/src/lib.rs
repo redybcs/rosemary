@@ -340,6 +340,7 @@ struct Api {
         Option<unsafe extern "C" fn(u32, *mut c_int) -> *mut *mut DisplayMode>,
 
     SDL_PollEvent: Option<unsafe extern "C" fn(*mut Event) -> bool>,
+    SDL_GetTicksNS: Option<unsafe extern "C" fn() -> u64>,
     SDL_WaitEventTimeout: Option<unsafe extern "C" fn(*mut Event, i32) -> bool>,
     SDL_PushEvent: Option<unsafe extern "C" fn(*mut Event) -> bool>,
     SDL_PeepEvents: Option<unsafe extern "C" fn(*mut Event, c_int, c_int, u32, u32) -> c_int>,
@@ -587,6 +588,7 @@ fn api() -> Option<&'static Api> {
             SDL_GetDisplayName,
             SDL_GetFullscreenDisplayModes,
             SDL_PollEvent,
+            SDL_GetTicksNS,
             SDL_WaitEventTimeout,
             SDL_PushEvent,
             SDL_PeepEvents,
@@ -2211,6 +2213,43 @@ pub mod video {
         u32::from_ne_bytes([raw.bytes[0], raw.bytes[1], raw.bytes[2], raw.bytes[3]])
     }
 
+    fn tracing_input() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("ROSEMARY_TRACE_EVENT").is_some())
+    }
+
+    /// How long after SDL stamped a key Rosemary read it: a host that held the
+    /// key shows no lag, a loop that did not read shows all of it.
+    fn trace_key_lag(e: &KeyboardEvent) {
+        if !tracing_input() {
+            return;
+        }
+        let Some(now) = api().and_then(|a| a.SDL_GetTicksNS).map(|f| unsafe { f() }) else {
+            return;
+        };
+        let lag = now.saturating_sub(e.timestamp) as f64 / 1e6;
+        eprintln!("rosemary: input: key {} {} read {lag:.1}ms after SDL stamped it", e.scancode, if e.down { "down" } else { "up" });
+    }
+
+    thread_local! {
+        static PRESENT_WAIT: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Input left unread while another thread presented, reported once it is read again.
+    fn trace_present_wait(waiting: bool) {
+        if !tracing_input() {
+            return;
+        }
+        PRESENT_WAIT.with(|since| match (waiting, since.get()) {
+            (true, None) => since.set(Some(std::time::Instant::now())),
+            (false, Some(start)) => {
+                since.set(None);
+                eprintln!("rosemary: input: events waited {:.1}ms for a present", start.elapsed().as_secs_f64() * 1000.0);
+            }
+            _ => {}
+        });
+    }
+
     /// The next event, or `None` when the queue is empty.
     pub fn poll() -> Option<Event> {
         let poll = api()?.SDL_PollEvent?;
@@ -2225,8 +2264,10 @@ pub mod video {
             // rather than the main thread (the game's frame) waiting out a
             // present the driver may block in for a whole refresh.
             let Some(commits) = crate::compositor::try_guard() else {
+                trace_present_wait(true);
                 return None;
             };
+            trace_present_wait(false);
             // SAFETY: a writable event of SDL's own size.
             let polled = unsafe { poll(&mut raw) };
             drop(commits);
@@ -2391,6 +2432,7 @@ pub mod video {
                 }
                 event_type::KEY_DOWN | event_type::KEY_UP => {
                     let e: KeyboardEvent = decode(&raw);
+                    trace_key_lag(&e);
                     Event::Key {
                         window: e.window,
                         scancode: e.scancode,

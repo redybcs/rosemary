@@ -540,6 +540,7 @@ unsafe fn turn_in_pool(receiver: Id, mode: &str) {
     // needs its events drained for the window to appear at all, so this is not
     // only about delivering input.
     let delivered = crate::event::pump(receiver);
+    crate::event::frame_may_run();
     // `-postEvent:atStart:` is used by Cocoa backends to wake work that must run
     // through their `-sendEvent:` override. Dispatch through the receiver rather
     // than calling this class's implementation directly so a principal
@@ -738,6 +739,7 @@ pub(crate) unsafe fn next_event_in_mode(
         IDLE_STREAK.store(0, Ordering::Relaxed);
         return event;
     }
+    crate::event::frame_may_run();
     // Apple runs the run loop in `mode` until an event arrives or the deadline
     // passes, and a toolkit waiting in here - Qt in a modal session does - relies
     // on its timers and sources firing meanwhile. Window-system input does not

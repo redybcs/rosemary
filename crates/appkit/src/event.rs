@@ -36,6 +36,58 @@ fn note_focus() {
     FOCUSED.store(focused, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Key events held back for the program's next frame, and whether it has had
+/// one since: it drains its queue and then runs the frame.
+static HELD_KEYS: std::sync::Mutex<Vec<sdl3::video::Event>> = std::sync::Mutex::new(Vec::new());
+static FRAME_SINCE_HOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The program may now run a frame with what it has been given.
+pub(crate) fn frame_may_run() {
+    FRAME_SINCE_HOLD.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A program reads key state once a frame, so a press and release delivered
+/// together never counts. A host that stalls - a busy input method, a long
+/// present - hands both over at once; the release waits for the next frame.
+fn hold_same_batch_release(
+    event: sdl3::video::Event,
+    pressed: &mut Vec<(u32, u32)>,
+) -> Option<sdl3::video::Event> {
+    let sdl3::video::Event::Key { window, scancode, down, repeat, .. } = event else {
+        return Some(event);
+    };
+    let mut held = HELD_KEYS.lock().unwrap_or_else(|e| e.into_inner());
+    // Later events of a key already held keep their order behind it.
+    let key_held = held
+        .iter()
+        .any(|e| matches!(e, sdl3::video::Event::Key { window: w, scancode: s, .. } if (*w, *s) == (window, scancode)));
+    if key_held || (!down && pressed.contains(&(window, scancode))) {
+        if tracing() && !key_held {
+            eprintln!("rosemary: input: {:.1}ms key {scancode} released in the batch that pressed it; held for a frame", trace_ms());
+        }
+        held.push(event);
+        FRAME_SINCE_HOLD.store(false, std::sync::atomic::Ordering::Relaxed);
+        return None;
+    }
+    if down && !repeat {
+        pressed.push((window, scancode));
+    }
+    Some(event)
+}
+
+/// Deliver what [`hold_same_batch_release`] kept, once a frame has run.
+fn release_held_keys() -> bool {
+    if !FRAME_SINCE_HOLD.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    let held = std::mem::take(&mut *HELD_KEYS.lock().unwrap_or_else(|e| e.into_inner()));
+    let any = !held.is_empty();
+    for event in held {
+        deliver(event);
+    }
+    any
+}
+
 pub fn pump(app: Id) -> bool {
     let _ = app;
     // Before anything else: a thread waiting for a GL context this one holds is
@@ -49,10 +101,13 @@ pub fn pump(app: Id) -> bool {
     debug_key();
     crate::script::run();
     trace_views();
-    let mut delivered = false;
+    let mut delivered = release_held_keys();
+    let mut pressed = Vec::new();
     while let Some(event) = sdl3::video::poll() {
         delivered = true;
-        deliver(event);
+        if let Some(event) = hold_same_batch_release(event, &mut pressed) {
+            deliver(event);
+        }
     }
     note_focus();
     crate::application::terminate_if_requested();
@@ -2669,5 +2724,31 @@ mod modal_presentation_tests {
             0,
             "modal presentation must not invoke arbitrary guest pump hooks"
         );
+    }
+}
+
+#[cfg(test)]
+mod held_key_tests {
+    use super::*;
+    use sdl3::video::Event;
+
+    fn key(scancode: u32, down: bool) -> Event {
+        Event::Key { window: 1, scancode, key: 0, modifiers: 0, down, repeat: false }
+    }
+
+    #[test]
+    fn a_release_in_its_press_batch_waits_for_a_frame() {
+        let mut pressed = Vec::new();
+        assert!(hold_same_batch_release(key(7, true), &mut pressed).is_some());
+        assert!(hold_same_batch_release(key(7, false), &mut pressed).is_none());
+        // A second tap of the held key stays behind the first release.
+        assert!(hold_same_batch_release(key(7, true), &mut pressed).is_none());
+        // Another key is untouched.
+        assert!(hold_same_batch_release(key(4, true), &mut pressed).is_some());
+        assert_eq!(HELD_KEYS.lock().unwrap().len(), 2);
+        assert!(!FRAME_SINCE_HOLD.load(std::sync::atomic::Ordering::Relaxed));
+        HELD_KEYS.lock().unwrap().clear();
+        // A release in a later batch than its press goes straight through.
+        assert!(hold_same_batch_release(key(4, false), &mut Vec::new()).is_some());
     }
 }
