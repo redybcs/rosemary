@@ -1615,4 +1615,21 @@ mod tests {
             "unrecognized selector sent to class NSObject: noSuchMessage"
         );
     }
+
+    #[test]
+    fn nearby_classes_and_selectors_use_distinct_send_cache_entries() {
+        // Interned selector names sit a few bytes apart, as do classes
+        // allocated together; neither may crowd into a few entries.
+        const KEYS: usize = 64;
+        let class = 0x7f5c_f93a_ac80;
+        let selector = 0x05c3_d50a_9c80;
+        let by_selector: std::collections::HashSet<usize> = (0..KEYS)
+            .map(|i| sends::index(class, selector + i * 0x20))
+            .collect();
+        let by_class: std::collections::HashSet<usize> = (0..KEYS)
+            .map(|i| sends::index(class + i * 0x80, selector))
+            .collect();
+        assert_eq!(by_selector.len(), KEYS);
+        assert_eq!(by_class.len(), KEYS);
+    }
 }
