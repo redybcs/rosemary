@@ -64,6 +64,9 @@ pub struct View {
 const WANTS_LAYER: usize = 1;
 const BACKING_LAYER: usize = 2;
 const CLIPS_TO_BOUNDS: usize = 4;
+/// `-setCanDrawSubviewsIntoLayer:`. Flattening subviews into this view's layer
+/// draws what compositing them separately does, so only the setting is kept.
+const DRAWS_SUBVIEWS_INTO_LAYER: usize = 16;
 const PLACEMENT_SHIFT: u32 = 8;
 
 /// The bits of [`View::posts`].
@@ -1756,6 +1759,18 @@ unsafe extern "C" fn wants_layer(receiver: Id, _sel: Sel) -> u8 {
     u8::from(view_of(receiver).layer_backing & WANTS_LAYER != 0)
 }
 
+unsafe extern "C" fn can_draw_subviews_into_layer(receiver: Id, _sel: Sel) -> u8 {
+    u8::from(view_of(receiver).layer_backing & DRAWS_SUBVIEWS_INTO_LAYER != 0)
+}
+
+unsafe extern "C" fn set_can_draw_subviews_into_layer(receiver: Id, _sel: Sel, flag: u8) {
+    let view = view_of(receiver);
+    match flag != 0 {
+        true => view.layer_backing |= DRAWS_SUBVIEWS_INTO_LAYER,
+        false => view.layer_backing &= !DRAWS_SUBVIEWS_INTO_LAYER,
+    }
+}
+
 /// `-layerContentsPlacement`, whose default of zero is
 /// `NSViewLayerContentsPlacementScaleAxesIndependently`.
 unsafe extern "C" fn layer_contents_placement(receiver: Id, _sel: Sel) -> isize {
@@ -2648,10 +2663,26 @@ unsafe extern "C" fn frame(receiver: Id, _sel: Sel) -> NSRect {
     view_of(receiver).frame
 }
 
+/// `-setFrame:`, which AppKit carries out by sending `-setFrameOrigin:` and
+/// `-setFrameSize:`: a view that tracks its size overrides only the latter,
+/// as Avalonia's does, and must still hear of a resize made through this.
 unsafe extern "C" fn set_frame(receiver: Id, _sel: Sel, frame: NSRect) {
     let before = view_of(receiver).frame;
-    view_of(receiver).frame = frame;
-    note_geometry_change(receiver, before);
+    if before == frame {
+        note_geometry_change(receiver, before);
+        return;
+    }
+    // SAFETY: `void (id, SEL, NSPoint)` and `void (id, SEL, NSSize)`.
+    unsafe {
+        if before.origin != frame.origin {
+            let f: unsafe extern "C" fn(Id, Sel, NSPoint) = std::mem::transmute(objc::msg::entry());
+            f(receiver, objc::sel::get("setFrameOrigin:"), frame.origin);
+        }
+        if before.size != frame.size {
+            let f: unsafe extern "C" fn(Id, Sel, NSSize) = std::mem::transmute(objc::msg::entry());
+            f(receiver, objc::sel::get("setFrameSize:"), frame.size);
+        }
+    }
 }
 
 unsafe extern "C" fn set_frame_size(receiver: Id, _sel: Sel, size: NSSize) {
@@ -3771,6 +3802,8 @@ pub(crate) fn install() {
         "wantsUpdateLayer" => no, c"c16@0:8";
         "updateLayer" => ignored, c"v16@0:8";
         "wantsLayer" => wants_layer, c"c16@0:8";
+        "setCanDrawSubviewsIntoLayer:" => set_can_draw_subviews_into_layer, c"v20@0:8c16";
+        "canDrawSubviewsIntoLayer" => can_draw_subviews_into_layer, c"c16@0:8";
         "setAllowedTouchTypes:" => set_allowed_touch_types, c"v24@0:8Q16";
         "allowedTouchTypes" => allowed_touch_types, c"Q16@0:8";
         "setClipsToBounds:" => set_clips_to_bounds, c"v20@0:8c16";
@@ -3807,6 +3840,61 @@ mod tests {
             origin: NSPoint { x, y },
             size: NSSize { width, height },
         }
+    }
+
+    static RESIZED_TO: std::sync::Mutex<Option<NSSize>> = std::sync::Mutex::new(None);
+
+    unsafe extern "C" fn recording_set_frame_size(receiver: Id, sel: Sel, size: NSSize) {
+        *RESIZED_TO.lock().unwrap() = Some(size);
+        // SAFETY: the superclass's own implementation, with the same arguments.
+        unsafe { set_frame_size(receiver, sel, size) };
+    }
+
+    #[test]
+    fn set_frame_reaches_a_set_frame_size_override() {
+        crate::bootstrap();
+        let class = objc::class::lookup(c"RosemarySizeTrackingTestView").unwrap_or_else(|| {
+            let class = objc::class::allocate_pair(
+                objc::class::lookup(c"NSView"),
+                c"RosemarySizeTrackingTestView",
+                0,
+            )
+            .expect("a subclass");
+            assert!(class.add_method(
+                objc::sel::get("setFrameSize:"),
+                recording_set_frame_size as objc::class::Imp,
+                c"v32@0:8{CGSize=dd}16",
+            ));
+            objc::class::register_pair(class);
+            class
+        });
+        // SAFETY: a fresh instance of an NSView subclass.
+        let tracked = unsafe {
+            init_with_frame(
+                objc::object::create_instance(class, 0),
+                objc::sel::get("initWithFrame:"),
+                rect(0.0, 0.0, 100.0, 100.0),
+            )
+        };
+        *RESIZED_TO.lock().unwrap() = None;
+        let send: unsafe extern "C" fn(Id, Sel, NSRect) =
+            unsafe { std::mem::transmute(objc::msg::entry()) };
+        // SAFETY: `-setFrame:` is `void (id, SEL, NSRect)`.
+        unsafe {
+            send(
+                tracked,
+                objc::sel::get("setFrame:"),
+                rect(5.0, 5.0, 900.0, 600.0),
+            )
+        };
+        assert_eq!(
+            *RESIZED_TO.lock().unwrap(),
+            Some(NSSize {
+                width: 900.0,
+                height: 600.0
+            })
+        );
+        assert_eq!(view_of(tracked).frame, rect(5.0, 5.0, 900.0, 600.0));
     }
 
     /// A superview and one subview of the given mask, wired as `-addSubview:`

@@ -65,6 +65,11 @@ pub fn database() -> Option<std::path::PathBuf> {
         .find(|dir| dir.is_dir())
 }
 
+type ZoneCache = std::collections::HashMap<String, Option<std::sync::Arc<crate::tzif::Zone>>>;
+
+/// Zones read so far, by name, including names the host turned out not to have.
+static ZONES: std::sync::Mutex<Option<ZoneCache>> = std::sync::Mutex::new(None);
+
 /// The zone called `name`, read from the host's database once and kept, or
 /// `None` for a name the host does not have.
 ///
@@ -72,10 +77,6 @@ pub fn database() -> Option<std::path::PathBuf> {
 /// zone lives even when its name is not in a database this can find; UTC and
 /// GMT are answered without one.
 pub fn zone(name: &str) -> Option<std::sync::Arc<crate::tzif::Zone>> {
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
-    static ZONES: Mutex<Option<HashMap<String, Option<Arc<crate::tzif::Zone>>>>> = Mutex::new(None);
-
     let mut zones = ZONES.lock().unwrap_or_else(|e| e.into_inner());
     let zones = zones.get_or_insert_default();
     if let Some(found) = zones.get(name) {
@@ -104,7 +105,7 @@ pub fn zone(name: &str) -> Option<std::sync::Arc<crate::tzif::Zone>> {
             "UTC" | "GMT" | "Etc/UTC" | "Etc/GMT" => Some(crate::tzif::Zone::fixed(0, name)),
             _ => offset_of_fixed_name(name).map(|offset| crate::tzif::Zone::fixed(offset, name)),
         })
-        .map(Arc::new);
+        .map(std::sync::Arc::new);
     zones.insert(name.to_owned(), found.clone());
     found
 }
@@ -180,6 +181,19 @@ pub unsafe extern "C" fn copy_default() -> CFTypeRef {
 
 pub unsafe extern "C" fn copy_system() -> CFTypeRef {
     new(&system_name())
+}
+
+/// `void CFTimeZoneResetSystem(void)`: forget what was read for the host's zone,
+/// so the next lookup sees a change to `/etc/localtime` or its contents.
+///
+/// The system name itself is never cached; what can go stale is the zone data
+/// kept under it, which for a name outside the database came from
+/// `/etc/localtime`.
+pub unsafe extern "C" fn reset_system() {
+    let mut zones = ZONES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(zones) = zones.as_mut() {
+        zones.remove(&system_name());
+    }
 }
 
 /// CFTimeZone's default abbreviation dictionary, which is what
@@ -282,6 +296,19 @@ pub unsafe fn name_of(timezone: CFTypeRef) -> Option<String> {
     // SAFETY: the name is a string this module made.
     let text = unsafe { crate::string::as_string(name) }?;
     Some(String::from_utf8_lossy(&text.utf8()).into_owned())
+}
+
+/// Seconds from 1970 to 2001, the reference date a `CFAbsoluteTime` counts from.
+const UNIX_TO_REFERENCE: f64 = 978_307_200.0;
+
+/// `CFTimeInterval CFTimeZoneGetSecondsFromGMT(CFTimeZoneRef, CFAbsoluteTime)`.
+pub unsafe extern "C" fn get_seconds_from_gmt(timezone: CFTypeRef, at: f64) -> f64 {
+    // SAFETY: a timezone from this runtime, or something `name_of` refuses.
+    let name = unsafe { name_of(timezone) };
+    let Some(zone) = name.as_deref().and_then(zone) else {
+        objc::fail!("CFTimeZoneGetSecondsFromGMT: no zone data for {name:?}");
+    };
+    zone.at((at + UNIX_TO_REFERENCE).floor() as i64).offset as f64
 }
 
 pub unsafe extern "C" fn get_name(timezone: CFTypeRef) -> CFTypeRef {

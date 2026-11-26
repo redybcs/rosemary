@@ -202,6 +202,14 @@ libraries as it would on a Mac, and the Swift half of Foundation (`Data`, `URL`,
 runtime's Foundation re-exports when the built-in Objective-C runtime is in use.
 In a prefix whose base predates it, those imports are unbound.
 
+libSystem is the other. Under the built-in libc it re-exports two of the base's
+own images as Apple's libSystem does: `libcopyfile.dylib`, and configd's client
+library `libsystem_configuration.dylib`, which is how libresolv asks for the
+DNS configuration. Apple never released libxpc, so XPC is this runtime's, over
+its Mach ports: a guest's `xpc_connection_create_mach_service` reaches a
+listener in any other guest of the same user, and either side's death reaches
+the other as `XPC_ERROR_CONNECTION_INTERRUPTED` or `XPC_ERROR_CONNECTION_INVALID`.
+
 A new prefix gets its base when it is created, and nothing is downloaded
 without consent: `rosemary run` asks with a dialog or on the terminal, and
 `ROSEMARY_PREFIX_SETUP` answers in advance. The download (about 2 MB) is
@@ -243,7 +251,7 @@ see which one is wrong.
 
 ## GUI
 
-On macOS, Rosemary has a built in GUI drawn over the guest's Metal or OpenGL frames, with either Objective-C runtime. It is off unless `ROSEMARY_GUI=1` is set; once on, `SHIFT` + `F7` shows or hides it. It shows the framerate of the application and has various profiling utilities built in, useful for narrowing down performance bottlenecks. `SHIFT` + `F8` gives it the mouse, and `SHIFT` + `F6`, `F9` and `F10` start an Instruments recording, region-entry counting and sampling. Under `ROSEMARY_OBJC=builtin` the hotkeys arrive only while the guest's window has the keyboard.
+On macOS, Rosemary has a built in GUI drawn over the guest's Metal or OpenGL frames, under either backend and with either Objective-C runtime. It is off unless `ROSEMARY_GUI=1` is set; once on, `SHIFT` + `F7` shows or hides it. It shows the framerate of the application and has various profiling utilities built in, useful for narrowing down performance bottlenecks. `SHIFT` + `F8` gives it the mouse, and `SHIFT` + `F6`, `F9` and `F10` start an Instruments recording, region-entry counting and sampling. Under `ROSEMARY_OBJC=builtin` the hotkeys arrive only while the guest's window has the keyboard. Region-entry counting and sampling measure recompiled code, so under `--native` they have nothing to show.
 
 ## Execution modes
 

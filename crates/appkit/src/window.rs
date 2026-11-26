@@ -165,6 +165,8 @@ mod style {
 /// A Wayland compositor does not - a menu has to be a popup surface, positioned
 /// against its parent - so the level is what this tree classifies by.
 mod window_level {
+    /// `NSNormalWindowLevel`: an ordinary document window.
+    pub const NORMAL: isize = 0;
     /// `NSFloatingWindowLevel`: a tool palette, above its document.
     pub const FLOATING: isize = 3;
     /// `NSPopUpMenuWindowLevel`: a menu, a combo box's list, a popover.
@@ -227,6 +229,11 @@ fn presentation(window: &Window) -> Presentation {
     match window.level {
         level if level >= window_level::SCREEN_SAVER => Presentation::Tooltip,
         level if level >= window_level::POPUP_MENU => Presentation::Menu,
+        // A transient floating window, such as a drag indicator, is placed by
+        // the program; the host tiles and focuses a toplevel as it likes.
+        level if level > window_level::NORMAL && window.hides_on_deactivate != 0 => {
+            Presentation::Menu
+        }
         _ => Presentation::Toplevel,
     }
 }
@@ -3249,6 +3256,17 @@ unsafe extern "C" fn screen(receiver: Id, _sel: Sel) -> Id {
     }
 }
 
+/// `NSBackingStoreBuffered`.
+const BACKING_STORE_BUFFERED: usize = 2;
+
+/// `-backingType`. AppKit treats the deprecated retained and nonretained
+/// stores as buffered, which is the one kind every window here has.
+unsafe extern "C" fn backing_type(_receiver: Id, _sel: Sel) -> usize {
+    BACKING_STORE_BUFFERED
+}
+
+unsafe extern "C" fn set_backing_type(_receiver: Id, _sel: Sel, _backing: usize) {}
+
 /// `-userSpaceScaleFactor`: the backing factor, as `NSScreen`'s answers, so a
 /// window and its screen agree.
 unsafe extern "C" fn user_space_scale_factor(receiver: Id, sel: Sel) -> f64 {
@@ -4433,6 +4451,8 @@ pub(crate) fn install() {
         "setStyleMask:" => set_style_mask, c"v24@0:8Q16";
         "setReleasedWhenClosed:" => ignored_flag, c"v20@0:8c16";
         "isOpaque" => yes, c"c16@0:8";
+        "backingType" => backing_type, c"Q16@0:8";
+        "setBackingType:" => set_backing_type, c"v24@0:8Q16";
         "setOpaque:" => ignored_flag, c"v20@0:8c16";
         "setHidesOnDeactivate:" => set_hides_on_deactivate, c"v20@0:8c16";
         "hidesOnDeactivate" => hides_on_deactivate, c"c16@0:8";
@@ -4592,6 +4612,16 @@ mod tests {
         body.style_mask = 0;
         body.level = 0;
         assert_eq!(presentation(body), Presentation::Toplevel);
+
+        // Borderless above the ordinary level is a popup when it hides on
+        // deactivation, and a toplevel otherwise.
+        body.level = window_level::FLOATING;
+        assert_eq!(presentation(body), Presentation::Toplevel);
+        body.hides_on_deactivate = 1;
+        assert_eq!(presentation(body), Presentation::Menu);
+        body.level = window_level::NORMAL;
+        assert_eq!(presentation(body), Presentation::Toplevel);
+        body.hides_on_deactivate = 0;
 
         // Borderless at menu level and above are the two popups.
         body.level = window_level::POPUP_MENU;

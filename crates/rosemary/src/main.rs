@@ -38,6 +38,20 @@ fn refused(path: &str) -> bool {
         .any(|refused| !refused.is_empty() && name == std::ffi::OsStr::new(refused))
 }
 
+/// Keeps every mapping inside the address range a Mac uses, which aarch64
+/// Linux exceeds. A preinit entry runs before any library's initializer, so
+/// before the first `malloc` (mimalloc overrides it) reserves an arena.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[used]
+#[unsafe(link_section = ".preinit_array")]
+static CONFINE: extern "C" fn() = confine;
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+extern "C" fn confine() {
+    darwin::commpage::reserve();
+    starnix::memory::confine_below(darwin::vmmap::USER_ADDRESS_END as usize);
+}
+
 /// Load and execute, with `argv[0]` the path as the guest will see it.
 ///
 /// `path` is this host's - it is what gets opened - and `guest` is the spelling

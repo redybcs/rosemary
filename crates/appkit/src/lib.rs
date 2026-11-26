@@ -109,6 +109,7 @@ mod tab;
 mod table;
 pub mod text;
 pub mod textinput;
+mod transaction;
 mod transform;
 pub mod uchr;
 pub mod view;
@@ -168,6 +169,7 @@ pub fn bootstrap() {
         bezier::install();
         layer::install();
         coreanimation::install();
+        transaction::install();
         text::install();
         label::install();
         // Last of the controls (text fields and labels included): a cell
